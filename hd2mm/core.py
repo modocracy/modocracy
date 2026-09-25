@@ -293,7 +293,16 @@ def _read_extra_manifest(root: Path) -> dict | None:
         requires = []
         for req in data.get("requires") or []:
             if isinstance(req, dict) and isinstance(req.get("name"), str):
-                requires.append({"name": req["name"], "revision": str(req.get("revision") or "")})
+                required_for = str(req.get("required_for") or "").strip()
+                requires.append({
+                    "name": req["name"],
+                    "revision": str(req.get("revision") or ""),
+                    "guid": clean_guid(req.get("guid")),
+                    # required_for가 있으면 모드 전체가 아니라 그 기능에만 필요한 것 (예: 단축키 바꾸기)
+                    "requiredFor": required_for,
+                    "optional": bool(req.get("optional")) or bool(required_for),
+                    "repository": str(req.get("repository") or "").strip(),
+                })
         provides = data.get("provides")
         return {
             "name": data["name"],
@@ -1037,14 +1046,28 @@ class Library:
 
 # ---------------------------------------------------------------- 점검
 
+def _feature_turned_off(snap: ModSnapshot, required_for: str) -> bool:
+    """required_for에 적힌 기능이 이 모드의 옵션 이름이고, 그 옵션이 꺼져 있으면 True."""
+    info, text = snap.info, required_for.lower()
+    if info.mode != "multi":
+        return False
+    for i, opt in enumerate(info.options):
+        if len(opt.name) >= 4 and opt.name.lower() in text:
+            return not snap.state["enabledOptions"][i]
+    return False
+
+
 def analyze(snapshot: list[ModSnapshot], game_version: str | None) -> dict[str, list[dict]]:
     """모드별 주의 사항: 필요한 모드 누락, 로더 위치, 게임 버전 차이, 중복."""
     issues: dict[str, list[dict]] = {s.id: [] for s in snapshot}
     enabled = [s for s in snapshot if s.enabled]
     by_name: dict[str, list[ModSnapshot]] = {}
+    by_guid: dict[str, list[ModSnapshot]] = {}
     for snap in snapshot:
         if snap.info and snap.info.extra:
             by_name.setdefault(snap.info.extra["name"].lower(), []).append(snap)
+        if snap.info and clean_guid(snap.id):
+            by_guid.setdefault(clean_guid(snap.id), []).append(snap)
     name_count: dict[str, int] = {}
     for snap in enabled:
         key = (snap.info.extra or {}).get("name", snap.info.name).lower()
@@ -1059,16 +1082,26 @@ def analyze(snapshot: list[ModSnapshot], game_version: str | None) -> dict[str, 
             add({"level": "warn", "text": "지금 고른 옵션으로는 설치할 파일이 없어요. 옵션을 확인해 주세요."})
         if snap.enabled:
             for req in extra.get("requires", []):
-                providers = by_name.get(req["name"].lower(), [])
+                if req.get("requiredFor") and _feature_turned_off(snap, req["requiredFor"]):
+                    continue  # 그 기능(옵션)을 꺼 두었으면 필요 없음
+                found = {p.id: p for p in by_name.get(req["name"].lower(), []) + by_guid.get(req.get("guid") or "", [])}
+                providers = list(found.values())
                 active = [p for p in providers if p.enabled]
+                revisions = [version_key(p.info.extra["revision"]) for p in active if (p.info.extra or {}).get("revision")]
                 need = f" ({req['revision']} 이상)" if req["revision"] else ""
+                where = f" 받는 곳: {req['repository']}" if req.get("repository") else ""
+                if req.get("optional"):
+                    # 일부 기능에만 필요한 모드: 없어도 나머지는 작동하므로 안내만 한다
+                    purpose = f" ({req['requiredFor']})" if req.get("requiredFor") else ""
+                    if not active:
+                        add({"level": "info", "text": f"‘{req['name']}’{need}는 일부 기능에만 필요해요{purpose}. "
+                                                      f"그 기능을 쓰지 않으면 없어도 돼요.{where}"})
+                    continue
                 if not providers:
-                    add({"level": "error", "text": f"‘{req['name']}’{need} 모드가 필요해요. 따로 받아서 목록에 추가해 주세요."})
+                    add({"level": "error", "text": f"‘{req['name']}’{need} 모드가 필요해요. 따로 받아서 목록에 추가해 주세요.{where}"})
                 elif not active:
                     add({"level": "error", "text": f"필요한 모드 ‘{req['name']}’가 꺼져 있어요. 켜 주세요."})
-                elif req["revision"] and all(
-                    version_key(p.info.extra["revision"]) < version_key(req["revision"]) for p in active
-                ):
+                elif req["revision"] and revisions and all(r < version_key(req["revision"]) for r in revisions):
                     add({"level": "warn", "text": f"‘{req['name']}’를 {req['revision']} 이상으로 업데이트해야 해요."})
             if _is_shared_loader(snap.info):
                 mine = {ps.archive for ps in snap.sets}

@@ -510,6 +510,43 @@ class SecondReviewTests(TempCase):
         self.lib.purge(self.game)
         self.assertEqual(self.lib.load_records(), {})
 
+    def test_feature_only_requirement_is_info_and_follows_option(self):
+        loader_guid = "612eaf70-d682-43c7-9efd-16dcc695f977"
+        pack = make_zip(self.tmp / "pack.zip", {
+            "manifest.json": json.dumps({"Version": 1, "Guid": "22222222-3333-4444-5555-666666666666", "Name": "Pack", "Options": [
+                {"Name": "Main", "Include": ["main"]},
+                {"Name": "Ship Station Hotkeys", "Include": ["hotkeys"]},
+            ]}),
+            "Pack-manifest.json": json.dumps({"name": "Pack", "requires": [
+                {"name": "Bingus Shared Loader", "guid": loader_guid, "revision": "loader-v17"},
+                {"name": "Mod Bindings Menu", "revision": "v2.0", "required_for": "Ship Station Hotkeys rebinding",
+                 "repository": "https://github.com/CowboyBingus/ModBindingsMenu"},
+            ]}),
+            f"main/{ARCHIVE}.patch_0": "m",
+            f"hotkeys/{ARCHIVE}.patch_0": "h",
+        })
+        pack_id = self.lib.import_archive(pack, pack.name)["id"]
+        issues = analyze(self.lib.snapshot(), None)[pack_id]
+        by_level = {i["level"]: i["text"] for i in issues}
+        self.assertIn("Bingus Shared Loader", by_level["error"])   # 로더는 정말 필요
+        self.assertIn("Mod Bindings Menu", by_level["info"])       # 단축키 바꾸기에만 필요
+        self.assertIn("일부 기능", by_level["info"])
+        self.assertIn("github.com/CowboyBingus/ModBindingsMenu", by_level["info"])
+        self.assertFalse(any("Mod Bindings Menu" in i["text"] for i in issues if i["level"] == "error"))
+
+        self.lib.update(pack_id, {"enabledOptions": [True, False]})  # Ship Station Hotkeys 끔
+        issues = analyze(self.lib.snapshot(), None)[pack_id]
+        self.assertFalse(any("Mod Bindings Menu" in i["text"] for i in issues))
+
+        # 확장 manifest 없이 GUID만 같은 로더도 인정
+        loader = make_zip(self.tmp / "loader.zip", {
+            "manifest.json": json.dumps({"Guid": loader_guid, "Name": "Loader"}),
+            f"{ARCHIVE}.patch_0": "l",
+        })
+        self.lib.import_archive(loader, loader.name)
+        issues = analyze(self.lib.snapshot(), None)[pack_id]
+        self.assertFalse(any(i["level"] in ("error", "warn") and "Loader" in i["text"] for i in issues))
+
     def test_locked_old_mod_folder_gives_clear_error(self):
         archive = make_zip(self.tmp / "mod.zip", {
             "manifest.json": json.dumps({"Guid": "11111111-2222-3333-4444-555555555555", "Name": "A"}),

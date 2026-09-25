@@ -450,7 +450,10 @@ function metaInfo(m) {
   add('추가한 날', fmtTime(m.addedAt));
   add('업데이트한 날', fmtTime(m.updatedAt));
   add('기준 게임 버전', m.gameVersion);
-  add('필요한 모드', (m.requires || []).map((r) => (r.revision ? `${r.name} (${r.revision} 이상)` : r.name)).join(', '));
+  add('필요한 모드', (m.requires || []).map((r) => {
+    const label = r.revision ? `${r.name} (${r.revision} 이상)` : r.name;
+    return r.optional ? `${label} — 선택: 일부 기능용` : label;
+  }).join(', '));
   add('모드 ID', m.guid ? h('span', { class: 'mono' }, m.guid) : null);
   if (!rows.length) return null;
   return h('div', { class: 'section' }, h('h3', null, '정보'), h('dl', { class: 'meta-grid' }, rows));
