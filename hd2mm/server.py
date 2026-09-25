@@ -400,10 +400,12 @@ def build_state(lib: Library) -> dict:
         if snap.info:
             info = snap.info
             root = info.root
-            stamp = int(root.stat().st_mtime)
 
             def url(rel):
-                return f"/api/mods/{quote(snap.id)}/file?path={quote(rel)}&v={stamp}" if rel and Path(rel).suffix.lower() in RASTER_TYPES else None
+                # v=그림 파일 수정 시각: 그림이 바뀌면 주소가 바뀌어 브라우저가 새로 받는다
+                if not rel or Path(rel).suffix.lower() not in RASTER_TYPES:
+                    return None
+                return f"/api/mods/{quote(snap.id)}/file?path={quote(rel)}&v={_revision(root / rel) or 0}"
 
             extra = info.extra or {}
             mod.update({

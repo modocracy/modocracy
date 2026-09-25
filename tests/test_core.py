@@ -470,10 +470,39 @@ class SecondReviewTests(TempCase):
         self.lib.deploy(self.game)
         record = self.lib._load_record(self.game)
         plan = build_plan(self.lib.snapshot())
-        record["signature"] = legacy_plan_signature(plan)  # v1.0.0이 남긴 기록
+        record["signature"] = legacy_plan_signature(plan)  # v1.0.0이 남긴 기록 (형식 표시 없음)
+        record.pop("sigVersion")
         self.lib._write_record(self.game, record)
         self.assertEqual(self.lib.status(self.game, self.lib.snapshot())["state"], "ok")
-        self.assertNotEqual(self.lib._load_record(self.game)["signature"], legacy_plan_signature(plan))
+        upgraded = self.lib._load_record(self.game)
+        self.assertNotEqual(upgraded["signature"], legacy_plan_signature(plan))
+        self.assertEqual(upgraded["sigVersion"], 2)
+
+    def test_legacy_signature_not_computed_for_new_records(self):
+        mod_id = self.import_patch()
+        self.lib.deploy(self.game)
+        self.lib.update(mod_id, {"enabled": False})  # 적용하지 않은 변경이 있는 평범한 상태
+        with mock.patch("hd2mm.core.legacy_plan_signature") as legacy:
+            self.assertEqual(self.lib.status(self.game, self.lib.snapshot())["state"], "dirty")
+        legacy.assert_not_called()
+
+    def test_blank_readme_is_ignored(self):
+        for content in ("", "  \r\n  "):
+            with self.subTest(content=repr(content)):
+                archive = make_zip(self.tmp / "mod.zip", {"readme.txt": content, f"{ARCHIVE}.patch_0": "p"})
+                mod_id = self.lib.import_archive(archive, archive.name)["id"]
+                self.assertIsNone(self.lib.snapshot()[-1].info.readme_file)
+                self.lib.remove(mod_id)
+
+    def test_readme_encodings(self):
+        utf8_with_typo = self.tmp / "utf8.txt"
+        utf8_with_typo.write_bytes("설치 방법: 압축을 풀고 적용하세요.".encode("utf-8") + b"\xff" + "끝".encode("utf-8"))
+        text = read_text(utf8_with_typo)
+        self.assertIn("설치 방법", text)
+        self.assertIn("끝", text)
+        cp949 = self.tmp / "cp949.txt"
+        cp949.write_bytes("설치 방법을 읽어 주세요".encode("cp949"))
+        self.assertEqual(read_text(cp949), "설치 방법을 읽어 주세요")
 
     def test_empty_records_are_not_kept(self):
         self.import_patch()

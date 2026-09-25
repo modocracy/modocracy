@@ -27,6 +27,7 @@ JUNK_NAMES = {"__macosx", ".ds_store", "thumbs.db", "desktop.ini"}
 GUID_RE = re.compile(r"^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$", re.IGNORECASE)
 MAX_README_BYTES = 200_000
 MOD_ID_RE = re.compile(r"^[0-9a-f-]{8,64}$")
+SIGNATURE_VERSION = 2  # 적용 기록의 지문 형식 (1 = v1.0.0의 절대 경로 방식)
 
 
 class ModError(Exception):
@@ -95,15 +96,28 @@ def read_text(path: Path, limit: int | None = None) -> str:
         data = data[:limit]
     else:
         data, truncated = path.read_bytes(), False
-    # 잘린 끝에 걸친 글자(최대 3바이트)는 버리고 해석한다
-    cuts = range(4) if truncated else range(1)
-    for encoding in ("utf-8-sig", "cp949"):
-        for cut in cuts:
+    return _decode(data, truncated)
+
+
+def _decode(data: bytes, truncated: bool) -> str:
+    """UTF-8로 읽되, 깨지는 곳이 대부분이면 한국어 윈도우 인코딩(cp949) 파일로 본다.
+
+    UTF-8 파일에 이상한 바이트가 몇 개 섞인 정도면 그 자리만 �로 두고 나머지는 그대로 보여 준다.
+    """
+    text = data.decode("utf-8-sig", errors="replace")
+    if truncated:
+        text = text.rstrip("�")  # 잘린 끝에 걸친 글자
+    broken = text.count("�")
+    if not broken:
+        return text
+    readable = sum(1 for ch in text if ord(ch) > 127 and ch != "�")
+    if readable < broken * 4:
+        for cut in (0, 1) if truncated else (0,):
             try:
-                return data[: len(data) - cut].decode(encoding)
+                return data[: len(data) - cut].decode("cp949")
             except UnicodeDecodeError:
                 continue
-    return data.decode("latin-1")
+    return text
 
 
 def read_json(path: Path):
@@ -240,8 +254,18 @@ def _find_readme(root: Path) -> str | None:
         return None
     for entry in files:
         if "readme" in entry.name.lower() or "read_me" in entry.name.lower() or "설명" in entry.name:
-            return entry.name
+            if not _is_blank_file(entry):
+                return entry.name
     return None
+
+
+def _is_blank_file(path: Path) -> bool:
+    """비어 있거나 공백뿐인 파일인지. 큰 파일은 내용이 있다고 보고 읽지 않는다."""
+    try:
+        size = path.stat().st_size
+        return size == 0 or (size < 4096 and not read_text(path).strip())
+    except OSError:
+        return True
 
 
 def read_readme(info: ModInfo) -> str | None:
@@ -545,12 +569,26 @@ def _tree_stamp(root: Path) -> tuple:
     하위 폴더까지 모든 폴더의 수정 시각(안에 파일·폴더가 생기거나 없어지면 바뀜)과
     최상위 .json 파일(manifest, "<이름>-manifest.json")의 수정 시각을 모은다.
     """
-    stamp = []
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames.sort()
-        stamp.append((dirpath, mtime_ns(Path(dirpath))))
-        if dirpath == str(root):
-            stamp += [(name, mtime_ns(root / name)) for name in sorted(filenames) if name.lower().endswith(".json")]
+    stamp = [("", mtime_ns(root))]
+    folders = [(str(root), "")]
+    while folders:
+        folder, rel = folders.pop()
+        try:
+            with os.scandir(folder) as it:
+                entries = sorted(it, key=lambda e: e.name)
+        except OSError:
+            continue
+        for entry in entries:
+            try:
+                # 목록을 읽을 때 함께 받은 정보를 쓰므로 폴더마다 따로 조회하지 않는다 (Windows)
+                if entry.is_dir(follow_symlinks=False):
+                    sub = f"{rel}/{entry.name}"
+                    stamp.append((sub, entry.stat(follow_symlinks=False).st_mtime_ns))
+                    folders.append((entry.path, sub))
+                elif not rel and entry.name.lower().endswith(".json"):
+                    stamp.append((entry.name, entry.stat(follow_symlinks=False).st_mtime_ns))
+            except OSError:
+                continue
     return tuple(stamp)
 
 
@@ -781,6 +819,7 @@ class Library:
             "gamePath": str(game_path),
             "deployedAt": datetime.now().isoformat(timespec="seconds"),
             "signature": signature,
+            "sigVersion": SIGNATURE_VERSION,
             "files": files,
             "mods": mods,
         })
@@ -806,9 +845,9 @@ class Library:
         current = plan_signature(plan)
         if saved == current:
             return True
-        if saved and saved == legacy_plan_signature(plan):
-            # v1.0.0에서 적용한 기록: 적용 내용은 같으니 새 형식 지문으로 바꿔 둔다
-            self._write_record(game_path, {**record, "signature": current})
+        # 지문 형식 표시가 없는 기록은 v1.0.0이 남긴 것: 예전 방식으로 한 번 비교해 보고 같으면 새 형식으로 바꿔 둔다
+        if saved and "sigVersion" not in record and saved == legacy_plan_signature(plan):
+            self._write_record(game_path, {**record, "signature": current, "sigVersion": SIGNATURE_VERSION})
             return True
         return False
 

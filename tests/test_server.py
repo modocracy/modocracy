@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import socket
 import tempfile
@@ -134,6 +135,22 @@ class ServerTests(unittest.TestCase):
         self.assertNotEqual(first, second)
         _, body = self.request("/api/mods/11111111-2222-3333-4444-555555555555/readme")
         self.assertEqual(body["readme"], "두 번째")
+
+    def test_thumbnail_url_changes_when_image_changes(self):
+        archive = make_zip(self.tmp / "mod.zip", {
+            "manifest.json": json.dumps({"Name": "M", "IconPath": "thumb.png"}),
+            "thumb.png": "old", f"{ARCHIVE}.patch_0": "p",
+        })
+        status, result = self.request("/api/import?name=mod.zip", data=archive.read_bytes())
+        self.assertEqual(status, 200, result)
+        _, state = self.request("/api/state")
+        before = state["mods"][0]["icon"]
+        image = self.lib.mods_dir / result["id"] / "thumb.png"
+        image.write_bytes(b"new picture")
+        stat = image.stat()
+        os.utime(image, ns=(stat.st_atime_ns, stat.st_mtime_ns + 5_000_000_000))
+        _, state = self.request("/api/state")
+        self.assertNotEqual(state["mods"][0]["icon"], before)
 
     def test_state_reads_deploy_records_once(self):
         with mock.patch.object(self.lib, "load_records", wraps=self.lib.load_records) as load:
