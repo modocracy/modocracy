@@ -503,6 +503,13 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _mtime_ns(path: Path) -> int | None:
+    try:
+        return path.stat().st_mtime_ns
+    except OSError:
+        return None
+
+
 def _record_key(game_path) -> str:
     """같은 폴더면 표기(대소문자·구분자)가 달라도 같은 값."""
     return os.path.normcase(os.path.abspath(str(game_path)))
@@ -523,6 +530,7 @@ class Library:
         shutil.rmtree(self.tmp_dir, ignore_errors=True)
         self.tmp_dir.mkdir(exist_ok=True)
         self.settings = self._load_settings()
+        self._info_cache: dict[str, tuple[tuple, ModInfo]] = {}
 
     # ---- 설정
 
@@ -565,12 +573,25 @@ class Library:
 
     # ---- 모드 정보
 
+    def info(self, entry: dict) -> ModInfo:
+        """모드 정보를 읽는다. 모드 폴더와 manifest가 그대로면 전에 읽은 결과를 다시 쓴다."""
+        root = self.mods_dir / entry["id"]
+        stamp = (_mtime_ns(root), _mtime_ns(root / "manifest.json"), entry.get("fallbackName"))
+        cached = self._info_cache.get(entry["id"])
+        if cached and cached[0] == stamp:
+            return cached[1]
+        info = parse_mod(root, entry.get("fallbackName"))
+        self._info_cache[entry["id"]] = (stamp, info)
+        return info
+
+    def readme(self, mod_id: str) -> str | None:
+        return self.info(self._entry(mod_id)).readme
+
     def snapshot(self) -> list[ModSnapshot]:
         result = []
         for entry in self.settings["mods"]:
-            root = self.mods_dir / entry["id"]
             try:
-                info = parse_mod(root, entry.get("fallbackName"))
+                info = self.info(entry)
                 state = normalize_state(info, entry.get("state"))
                 result.append(ModSnapshot(entry, info, None, state, resolve_patch_sets(info, state)))
             except (ModError, OSError) as exc:
@@ -602,13 +623,20 @@ class Library:
             previous_name = None
             if existing:
                 try:
-                    previous_name = parse_mod(dest, existing.get("fallbackName")).name
+                    previous_name = self.info(existing).name
                 except (ModError, OSError):
                     pass
             old = None
             if dest.exists():
                 old = self.tmp_dir / f"old-{uuid.uuid4().hex}"
-                os.replace(dest, old)
+                try:
+                    os.replace(dest, old)
+                except OSError as exc:
+                    raise ModError(
+                        "기존 모드 파일을 바꾸지 못했어요. 이 모드 폴더의 파일이 다른 프로그램에서 열려 있으면 "
+                        f"닫고 다시 시도해 주세요. ({exc})"
+                    ) from None
+            self._info_cache.pop(mod_id, None)
             try:
                 shutil.move(str(root), str(dest))
             except OSError as exc:
@@ -625,7 +653,7 @@ class Library:
         if existing:
             # 같은 모드(같은 GUID)의 새 버전: 순서와 켜짐 상태는 유지
             existing.update({"sourceName": original_name, "fallbackName": fallback_name, "updatedAt": now})
-            new_info = parse_mod(dest, fallback_name)
+            new_info = self.info(existing)
             if len(new_info.options) != len((existing.get("state") or {}).get("enabledOptions") or []):
                 existing["state"] = None
         else:
@@ -643,7 +671,7 @@ class Library:
             return len(mods)
         last = mods[-1]
         try:
-            if _is_shared_loader(parse_mod(self.mods_dir / last["id"], last.get("fallbackName"))):
+            if _is_shared_loader(self.info(last)):
                 return len(mods) - 1
         except (ModError, OSError):
             pass
@@ -653,6 +681,7 @@ class Library:
         entry = self._entry(mod_id)
         self.settings["mods"].remove(entry)
         self.save()
+        self._info_cache.pop(entry["id"], None)
         shutil.rmtree(self.mods_dir / entry["id"], ignore_errors=True)
 
     def reorder(self, ids: list[str]) -> None:
@@ -668,7 +697,7 @@ class Library:
             entry["enabled"] = bool(changes["enabled"])
         state_keys = {"enabledOptions", "selectedSubs", "choice"}
         if state_keys & set(changes):
-            info = parse_mod(self.mods_dir / mod_id, entry.get("fallbackName"))
+            info = self.info(entry)
             state = normalize_state(info, entry.get("state"))
             for key in state_keys & set(changes):
                 state[key] = changes[key]
@@ -822,8 +851,10 @@ class Library:
     def _prepare(self, game_path: Path, snapshot: list[ModSnapshot], unmanaged_mode: str):
         data_dir = game_path / "data"
         for temp in data_dir.glob("*.hd2mm-tmp"):
-            if temp.is_file():
-                temp.unlink()
+            try:
+                temp.unlink(missing_ok=True)
+            except OSError:
+                pass  # 지난번에 남은 임시 파일 정리는 할 수 있을 때만 한다 (게임은 이 이름을 읽지 않음)
         record = self._load_record(game_path) or {}
         recorded = {f["name"].lower(): f for f in record.get("files") or [] if isinstance(f, dict) and "name" in f}
         recorded = {name: info for name, info in recorded.items() if self._matches_record(data_dir / info["name"], info)}

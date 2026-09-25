@@ -150,6 +150,9 @@ class Handler(BaseHTTPRequestHandler):
             parts = path.strip("/").split("/")
             if len(parts) == 4 and parts[:2] == ["api", "mods"] and parts[3] == "file":
                 return self._mod_file(unquote(parts[2]), query.get("path", [""])[0])
+            if len(parts) == 4 and parts[:2] == ["api", "mods"] and parts[3] == "readme":
+                with self.server.lock:
+                    return self._send_json({"readme": self.server.library.readme(unquote(parts[2]))})
             self._error("not found", 404)
         except ModError as exc:
             self._error(str(exc))
@@ -429,7 +432,7 @@ def build_state(lib: Library) -> dict:
                     }
                     for ps in snap.sets
                 ],
-                "readme": info.readme,
+                "hasReadme": bool(info.readme),  # 본문은 펼칠 때 /api/mods/<id>/readme 로 가져온다
             })
         else:
             mod["name"] = entry.get("fallbackName") or entry.get("sourceName") or snap.id

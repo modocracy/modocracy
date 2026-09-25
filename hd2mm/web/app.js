@@ -417,11 +417,30 @@ function fold(key, ...children) {
   }, children);
 }
 
+// README 본문은 목록 새로고침마다 보내지 않고, 펼칠 때 한 번 가져와 기억해 둔다.
+const readmeCache = new Map(); // `${id}|${바뀐 시각}` → Promise<string>
+
+function loadReadme(m) {
+  const key = `${m.id}|${m.updatedAt || m.addedAt || ''}`;
+  if (!readmeCache.has(key)) {
+    readmeCache.set(key, api(`/api/mods/${enc(m.id)}/readme`).then(
+      (r) => r.readme || '',
+      (e) => { readmeCache.delete(key); throw e; },
+    ));
+  }
+  return readmeCache.get(key);
+}
+
 function readme(m) {
-  if (!m.readme) return null;
-  return fold(`${m.id}:readme`,
+  if (!m.hasReadme) return null;
+  const pre = h('pre', { class: 'readme' }, '불러오는 중…');
+  const show = () => loadReadme(m).then((text) => { pre.textContent = text; }, (e) => { pre.textContent = e.message; });
+  const details = fold(`${m.id}:readme`,
     h('summary', null, '제작자 설명서 (README)'),
-    h('div', { class: 'fold-body' }, h('pre', { class: 'readme' }, m.readme)));
+    h('div', { class: 'fold-body' }, pre));
+  details.addEventListener('toggle', () => { if (details.open) show(); });
+  if (details.open) show();
+  return details;
 }
 
 function metaInfo(m) {
@@ -526,8 +545,19 @@ async function importFiles(fileList) {
   }
 }
 
+// 앞서 누른 변경(켜기·옵션·순서)이 서버에 반영되고 화면이 새로고침될 때까지 기다린다.
+async function settlePendingChanges() {
+  busy = 'wait';
+  try {
+    await mutationQueue;
+  } finally {
+    busy = null;
+  }
+}
+
 async function runGameAction(kind) {
   if (busy || !state) return false;
+  await settlePendingChanges();
   if (kind === 'deploy') {
     const broken = state.mods.filter((m) => m.enabled && (m.error || m.issues.some((i) => i.level === 'error')));
     if (broken.length) {
@@ -613,6 +643,8 @@ function confirmUnmanaged(groups, kind) {
 }
 
 async function launchGame() {
+  if (busy || !state) return;
+  await settlePendingChanges();
   if (needsDeploy() && !state.game.running) {
     const choice = await openModal({
       title: '아직 적용하지 않은 변경이 있어요',

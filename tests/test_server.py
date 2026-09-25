@@ -104,6 +104,19 @@ class ServerTests(unittest.TestCase):
         _, state = self.request("/api/state")
         self.assertEqual(state["status"]["state"], "dirty")
 
+    def test_readme_is_served_separately(self):
+        archive = make_zip(self.tmp / "mod.zip", {"readme.txt": "사용법 설명", f"{ARCHIVE}.patch_0": "p"})
+        status, result = self.request("/api/import?name=mod.zip", data=archive.read_bytes())
+        self.assertEqual(status, 200, result)
+        _, state = self.request("/api/state")
+        mod = state["mods"][0]
+        self.assertTrue(mod["hasReadme"])
+        self.assertNotIn("readme", mod)
+        status, body = self.request(f"/api/mods/{result['id']}/readme")
+        self.assertEqual((status, body), (200, {"readme": "사용법 설명"}))
+        status, _ = self.request("/api/mods/unknown/readme")
+        self.assertEqual(status, 400)
+
     def test_folder_dialog_does_not_block_other_requests(self):
         opened, release = threading.Event(), threading.Event()
 

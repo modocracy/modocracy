@@ -418,6 +418,53 @@ class SecondReviewTests(TempCase):
         self.assertEqual(self.lib.other_deployments(other), [])
         self.assertEqual(self.lib.status(other, self.lib.snapshot())["state"], "ok")
 
+    def test_mod_info_is_cached_until_folder_changes(self):
+        mod_id = self.import_patch()
+        self.lib.snapshot()
+        with mock.patch("hd2mm.core.parse_mod", wraps=parse_mod) as parse:
+            self.lib.snapshot()
+            self.lib.snapshot()
+            self.assertEqual(parse.call_count, 0)  # 폴더가 그대로면 전에 읽은 결과를 씀
+            (self.lib.mods_dir / mod_id / "manifest.json").write_text('{"Name": "Renamed"}', encoding="utf-8")
+            self.assertEqual(self.lib.snapshot()[0].info.name, "Renamed")
+            self.assertEqual(parse.call_count, 1)
+
+    def test_locked_old_mod_folder_gives_clear_error(self):
+        archive = make_zip(self.tmp / "mod.zip", {
+            "manifest.json": json.dumps({"Guid": "11111111-2222-3333-4444-555555555555", "Name": "A"}),
+            f"{ARCHIVE}.patch_0": "p",
+        })
+        mod_id = self.lib.import_archive(archive, archive.name)["id"]
+        dest = self.lib.mods_dir / mod_id
+        real_replace = os.replace
+
+        def locked(src, dst):
+            if Path(src) == dest:
+                raise PermissionError("in use")
+            return real_replace(src, dst)
+
+        with mock.patch("hd2mm.core.os.replace", side_effect=locked):
+            with self.assertRaises(ModError) as ctx:
+                self.lib.import_archive(archive, archive.name)
+        self.assertIn("다른 프로그램에서 열려", str(ctx.exception))
+        self.assertTrue((dest / f"{ARCHIVE}.patch_0").exists())
+
+    def test_locked_leftover_temp_does_not_block_deploy(self):
+        self.import_patch()
+        leftover = self.game / "data" / "ffffffffffffffff.patch_7.hd2mm-tmp"
+        leftover.write_bytes(b"old temp")
+        real_unlink = Path.unlink
+
+        def unlink(path, missing_ok=False):
+            if path.name.endswith(".hd2mm-tmp") and path.exists():
+                raise PermissionError("in use")
+            return real_unlink(path, missing_ok=missing_ok)
+
+        with mock.patch.object(Path, "unlink", autospec=True, side_effect=unlink):
+            self.lib.deploy(self.game)
+            self.lib.purge(self.game)
+        self.assertEqual(self.game_files(), [leftover.name])
+
     def test_reads_old_single_record_file(self):
         self.import_patch()
         self.lib.deploy(self.game)
