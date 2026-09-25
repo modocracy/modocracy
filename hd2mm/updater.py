@@ -19,6 +19,7 @@ from pathlib import Path
 from . import APP_NAME, __version__
 from .core import ModError, version_key
 from .gameinfo import CREATE_NO_WINDOW
+from .i18n import t
 
 REPO = "JJ-dot-eng/modocracy"
 LATEST_API = f"https://api.github.com/repos/{REPO}/releases/latest"
@@ -51,9 +52,9 @@ def fetch_latest(timeout: float = 8) -> Release:
         with urllib.request.urlopen(_request(LATEST_API), timeout=timeout) as res:
             data = json.loads(res.read().decode("utf-8"))
     except (OSError, ValueError):
-        raise ModError("새 버전을 확인하지 못했어요. 인터넷 연결을 확인해 주세요.") from None
+        raise ModError(t("err.update_check_failed")) from None
     if not isinstance(data, dict):
-        raise ModError("새 버전 정보를 읽지 못했어요.")
+        raise ModError(t("err.update_info_invalid"))
     asset = next((a for a in data.get("assets") or [] if isinstance(a, dict) and a.get("name") == ASSET_NAME), {})
     url = str(asset.get("browser_download_url") or "")
     digest = str(asset.get("digest") or "").lower()
@@ -81,9 +82,9 @@ def current_exe() -> Path | None:
 def install_problem(release: Release) -> str | None:
     """자동 업데이트를 할 수 없는 이유. 할 수 있으면 None."""
     if current_exe() is None:
-        return "exe로 실행할 때만 자동 업데이트할 수 있어요."
+        return t("update.only_exe")
     if not release.asset_url or not release.sha256:
-        return "이 릴리즈에는 자동 업데이트용 파일 정보가 없어요."
+        return t("update.no_asset")
     return None
 
 
@@ -100,15 +101,15 @@ def download(release: Release, exe: Path, timeout: float = 60) -> Path:
                 total += len(chunk)
     except PermissionError:
         target.unlink(missing_ok=True)
-        raise ModError("이 폴더에는 새 버전을 저장할 수 없어요. 릴리즈 페이지에서 직접 받아 주세요.") from None
+        raise ModError(t("err.update_no_write")) from None
     except OSError:
         target.unlink(missing_ok=True)
-        raise ModError("새 버전을 내려받지 못했어요. 인터넷 연결을 확인해 주세요.") from None
+        raise ModError(t("err.update_download_failed")) from None
     with open(target, "rb") as fh:
         is_exe = fh.read(2) == b"MZ"
     if not is_exe or (release.size and total != release.size) or digest.hexdigest() != release.sha256:
         target.unlink(missing_ok=True)
-        raise ModError("내려받은 파일이 올바르지 않아요(검사값 불일치). 잠시 후 다시 시도해 주세요.")
+        raise ModError(t("err.update_bad_file"))
     return target
 
 

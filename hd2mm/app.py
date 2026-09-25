@@ -18,7 +18,8 @@ import webbrowser
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from . import APP_NAME, LEGACY_APP_NAME, __version__, gameinfo, updater
+from . import APP_NAME, LEGACY_APP_NAME, __version__, gameinfo, i18n, updater
+from .i18n import t
 from .core import Library, write_json
 from .server import AppServer
 
@@ -210,7 +211,7 @@ def create_server(library: Library, port: int, auto_exit: bool) -> AppServer:
             return AppServer(("127.0.0.1", candidate), library, web_dir(), auto_exit=auto_exit)
         except OSError:
             continue
-    raise OSError("사용할 수 있는 포트가 없어요.")
+    raise OSError(t("startup.no_port"))
 
 
 def show_error(message: str) -> None:
@@ -230,13 +231,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--browser", action="store_true", help="전용 창 대신 Edge 앱 창(또는 기본 브라우저)으로 열기")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args(argv)
+    i18n.set_language(i18n.system_language())  # 설정을 읽기 전에 뜨는 오류 창은 Windows 언어로
 
     custom_dir = args.data_dir or os.environ.get("HD2MM_DATA_DIR")
     data_dir = Path(custom_dir or default_data_dir()).resolve()
     try:
         acquired = acquire_instance_mutex(data_dir)
     except OSError as exc:
-        show_error(f"실행 중인 모드 매니저를 확인하지 못했어요.\n\n{exc}")
+        show_error(t("startup.check_failed", detail=exc))
         return 1
     if not acquired:
         if args.no_window:
@@ -249,16 +251,16 @@ def main(argv: list[str] | None = None) -> int:
                 show_existing(existing)
                 return 0
             time.sleep(0.2)
-        show_error("실행 중인 모드 매니저가 응답하지 않아요. 잠시 후 다시 실행해 주세요.")
+        show_error(t("startup.not_responding"))
         return 1
     if not custom_dir and not migrate_legacy_data(data_dir):
-        show_error("이전 버전(HD2ModManager)이 실행 중이라 설정을 옮기지 못했어요.\n이전 버전 창을 닫고 다시 실행해 주세요.")
+        show_error(t("startup.legacy_running"))
         return 1
     try:
         data_dir.mkdir(parents=True, exist_ok=True)
         setup_logging(data_dir, args.verbose)
     except OSError as exc:
-        show_error(f"모드 보관 폴더를 만들 수 없어요:\n{data_dir}\n\n{exc}")
+        show_error(t("startup.data_dir_failed", path=data_dir, detail=exc))
         return 1
 
     existing = running_instance(data_dir)
@@ -274,13 +276,14 @@ def main(argv: list[str] | None = None) -> int:
     webview = None if args.no_window or args.browser else load_webview()
     try:
         library = Library(data_dir)
+        i18n.set_language(i18n.resolve(library.settings.get("language", "auto")))
         if not library.game_path:
             library.set_game_path(gameinfo.detect_game_path())
         # 전용 창이면 창이 닫힐 때 끝나므로, 연결이 끊기면 스스로 끝나는 기능은 Edge 창 모드에서만 쓴다
         server = create_server(library, args.port, auto_exit=not args.no_window and webview is None)
     except Exception as exc:  # noqa: BLE001 - 창 없이 실행되므로 메시지 상자로 알림
         log.exception("시작 실패")
-        show_error(f"모드 매니저를 시작하지 못했어요.\n\n{exc}")
+        show_error(t("startup.failed", detail=exc))
         return 1
 
     # 화면이 처음 제대로 뜨면 지난 업데이트가 남긴 옛 exe를 지운다 (교체 작업은 이것으로 성공을 확인한다)

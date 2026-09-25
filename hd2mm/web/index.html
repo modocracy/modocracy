@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ko">
+<html lang="__HD2MM_LANG__">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -19,8 +19,8 @@
       </div>
     </div>
     <div class="topbar-right">
-      <button id="gameChip" class="game-chip" type="button" title="게임 폴더 설정"></button>
-      <button id="settingsBtn" class="icon-btn" type="button" title="설정" aria-label="설정"></button>
+      <button id="gameChip" class="game-chip" type="button" title="게임 폴더 설정" data-i18n-title="chip.title"></button>
+      <button id="settingsBtn" class="icon-btn" type="button" title="설정" aria-label="설정" data-i18n-title="settings.title" data-i18n-aria="settings.title"></button>
     </div>
   </header>
 
@@ -30,49 +30,50 @@
     <div class="status-text">
       <span id="statusDot" class="status-dot"></span>
       <div>
-        <div id="statusTitle" class="status-title">불러오는 중…</div>
+        <div id="statusTitle" class="status-title" data-i18n="common.loading">불러오는 중…</div>
         <div id="statusSub" class="status-sub"></div>
       </div>
     </div>
     <div class="status-actions">
-      <button id="purgeBtn" class="btn ghost" type="button">모두 제거</button>
-      <button id="launchBtn" class="btn" type="button">게임 실행</button>
-      <button id="deployBtn" class="btn primary" type="button">적용하기</button>
+      <button id="purgeBtn" class="btn ghost" type="button" data-i18n="btn.remove_all">모두 제거</button>
+      <button id="launchBtn" class="btn" type="button" data-i18n="btn.launch">게임 실행</button>
+      <button id="deployBtn" class="btn primary" type="button" data-i18n="btn.apply">적용하기</button>
     </div>
   </section>
 
   <main class="layout">
-    <section class="panel list-panel" aria-label="모드 목록">
+    <section class="panel list-panel" aria-label="모드 목록" data-i18n-aria="list.title">
       <div class="panel-head">
         <div>
-          <h2>모드 목록 <span id="modCount" class="count"></span></h2>
-          <p class="hint">아래에 있을수록 우선순위가 높아요. 겹치는 부분은 아래 모드가 덮어써요.</p>
+          <h2><span data-i18n="list.title">모드 목록</span> <span id="modCount" class="count"></span></h2>
+          <p class="hint" data-i18n="list.hint">아래에 있을수록 우선순위가 높아요. 겹치는 부분은 아래 모드가 덮어써요.</p>
         </div>
-        <button id="addBtn" class="btn outline" type="button">+ 모드 추가</button>
+        <button id="addBtn" class="btn outline" type="button" data-i18n="list.add">+ 모드 추가</button>
         <input id="fileInput" type="file" accept=".zip,.7z,.rar" multiple hidden>
       </div>
       <div class="list-scroll">
         <ol id="modList" class="mod-list"></ol>
         <button id="emptyList" class="empty-drop" type="button" hidden>
           <span class="empty-icon" aria-hidden="true"></span>
-          <strong>모드 압축 파일을 여기로 끌어다 놓으세요</strong>
-          <span>.zip · .7z · .rar — 또는 눌러서 파일 고르기</span>
+          <strong data-i18n="drop.empty_title">모드 압축 파일을 여기로 끌어다 놓으세요</strong>
+          <span data-i18n="drop.empty_text">.zip · .7z · .rar — 또는 눌러서 파일 고르기</span>
         </button>
       </div>
     </section>
 
-    <section id="detail" class="panel detail-panel" aria-label="모드 정보"></section>
+    <section id="detail" class="panel detail-panel" aria-label="모드 정보" data-i18n-aria="detail.aria"></section>
   </main>
 
   <div id="dropOverlay" class="drop-overlay" hidden>
     <div class="drop-box">
       <span class="empty-icon" aria-hidden="true"></span>
-      <strong>놓으면 모드를 추가해요</strong>
+      <strong data-i18n="drop.overlay">놓으면 모드를 추가해요</strong>
       <span>.zip · .7z · .rar</span>
     </div>
   </div>
   <div id="modalRoot"></div>
   <div id="toasts" class="toasts" aria-live="polite"></div>
+  <script src="/i18n.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

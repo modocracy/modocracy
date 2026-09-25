@@ -19,6 +19,8 @@ from datetime import datetime
 from pathlib import Path
 
 from .gameinfo import CREATE_NO_WINDOW, find_7zip
+from . import i18n
+from .i18n import t
 
 PATCH_RE = re.compile(r"^([0-9a-f]{16})\.patch_(\d+)(\.gpu_resources|\.stream)?$", re.IGNORECASE)
 COMPANION_SUFFIXES = (".gpu_resources", ".stream")
@@ -239,7 +241,7 @@ def _parse_option(root: Path, raw: dict, fallback: str) -> ModOption:
     subs = _get(raw, "SubOptions")
     if isinstance(subs, list):
         opt.subs = [
-            _parse_option(root, s, f"선택 {i + 1}") for i, s in enumerate(subs) if isinstance(s, dict)
+            _parse_option(root, s, t("suboption.default", n=i + 1)) for i, s in enumerate(subs) if isinstance(s, dict)
         ]
     return opt
 
@@ -324,9 +326,9 @@ def parse_mod(root: Path, fallback_name: str | None = None) -> ModInfo:
         try:
             data = read_json(manifest_path)
         except (ValueError, OSError) as exc:
-            raise ModError(f"manifest.json 형식이 올바르지 않아요: {exc}") from None
+            raise ModError(t("err.manifest_invalid_detail", detail=exc)) from None
         if not isinstance(data, dict):
-            raise ModError("manifest.json 형식이 올바르지 않아요.")
+            raise ModError(t("err.manifest_invalid"))
         info.guid = clean_guid(_get(data, "Guid"))
         info.name = str(_get(data, "Name") or "").strip() or info.name
         info.description = str(_get(data, "Description") or "").strip()
@@ -340,7 +342,7 @@ def parse_mod(root: Path, fallback_name: str | None = None) -> ModInfo:
         elif any(isinstance(o, dict) for o in raw):
             info.kind, info.mode = "v1", "multi"
             info.options = [
-                _parse_option(root, o, f"옵션 {i + 1}") for i, o in enumerate(raw) if isinstance(o, dict)
+                _parse_option(root, o, t("option.default", n=i + 1)) for i, o in enumerate(raw) if isinstance(o, dict)
             ]
         else:
             info.kind = "v1" if _get(data, "Version") else "legacy"
@@ -444,7 +446,7 @@ def extract_archive(archive: Path, dest: Path, ext: str) -> None:
         try:
             zf = zipfile.ZipFile(archive)
         except zipfile.BadZipFile:
-            raise ModError("압축 파일이 손상되었거나 올바른 zip 파일이 아니에요.") from None
+            raise ModError(t("err.zip_broken")) from None
         with zf:
             for member in zf.infolist():
                 name = member.filename.replace("\\", "/")
@@ -461,14 +463,14 @@ def extract_archive(archive: Path, dest: Path, ext: str) -> None:
         return
     seven_zip = find_7zip()
     if not seven_zip:
-        raise ModError(f"{ext} 파일을 풀려면 7-Zip이 필요해요. 7-Zip을 설치하거나 zip 파일로 받아 주세요.")
+        raise ModError(t("err.need_7zip", ext=ext))
     result = subprocess.run(
         [seven_zip, "x", "-y", "-bso0", "-bsp0", f"-o{dest}", str(archive)],
         capture_output=True, text=True, errors="ignore", creationflags=CREATE_NO_WINDOW,
     )
     if result.returncode != 0:
         detail = (result.stderr or result.stdout).strip().splitlines()
-        raise ModError("압축을 풀지 못했어요." + (f" ({detail[-1]})" if detail else ""))
+        raise ModError(t("err.extract_failed", detail=f" ({detail[-1]})" if detail else ""))
 
 
 def find_mod_root(staging: Path) -> Path:
@@ -657,7 +659,7 @@ class Library:
         for entry in self.settings["mods"]:
             if entry["id"] == mod_id:
                 return entry
-        raise ModError("해당 모드를 찾을 수 없어요. 새로고침해 주세요.")
+        raise ModError(t("err.mod_not_found"))
 
     def mod_dir(self, mod_id: str) -> Path:
         return self.mods_dir / self._entry(mod_id)["id"]
@@ -667,7 +669,8 @@ class Library:
     def info(self, entry: dict) -> ModInfo:
         """모드 정보를 읽는다. 모드 폴더 구조와 설정 파일이 그대로면 전에 읽은 결과를 다시 쓴다."""
         root = self.mods_dir / entry["id"]
-        stamp = (_tree_stamp(root), entry.get("fallbackName"))
+        # 이름 없는 옵션의 기본 이름("옵션 1")이 언어마다 달라서 언어도 함께 비교한다
+        stamp = (_tree_stamp(root), entry.get("fallbackName"), i18n.current())
         cached = self._info_cache.get(entry["id"])
         if cached and cached[0] == stamp:
             return cached[1]
@@ -694,18 +697,18 @@ class Library:
     def import_archive(self, archive: Path, original_name: str) -> dict:
         ext = Path(original_name).suffix.lower()
         if ext not in ARCHIVE_EXTS:
-            raise ModError(".zip, .7z, .rar 압축 파일만 추가할 수 있어요.")
+            raise ModError(t("err.archive_types"))
         fallback_name = Path(original_name).stem
         staging = self.tmp_dir / f"import-{uuid.uuid4().hex}"
         try:
             try:
                 extract_archive(archive, staging, ext)
             except OSError as exc:
-                raise ModError(f"압축을 푸는 중 오류가 났어요: {exc}") from None
+                raise ModError(t("err.extract_error", detail=exc)) from None
             root = find_mod_root(staging)
             info = parse_mod(root, fallback_name)
             if not _patch_sets_for(root, info.all_dirs()):
-                raise ModError("이 압축 파일에서 Helldivers 2 모드 파일(.patch_0 등)을 찾지 못했어요.")
+                raise ModError(t("err.no_patch_files"))
             mod_id = info.guid or uuid.uuid4().hex
             existing = next((m for m in self.settings["mods"] if clean_guid(m["id"]) == clean_guid(mod_id)), None)
             if existing:
@@ -723,10 +726,7 @@ class Library:
                 try:
                     os.replace(dest, old)
                 except OSError as exc:
-                    raise ModError(
-                        "기존 모드 파일을 바꾸지 못했어요. 이 모드 폴더의 파일이 다른 프로그램에서 열려 있으면 "
-                        f"닫고 다시 시도해 주세요. ({exc})"
-                    ) from None
+                    raise ModError(t("err.mod_folder_locked", detail=exc)) from None
             self._info_cache.pop(mod_id, None)
             try:
                 shutil.move(str(root), str(dest))
@@ -734,7 +734,7 @@ class Library:
                 if old is not None:
                     shutil.rmtree(dest, ignore_errors=True)
                     os.replace(old, dest)
-                raise ModError(f"모드를 보관함에 저장하지 못했어요: {exc}") from None
+                raise ModError(t("err.store_failed", detail=exc)) from None
             if old is not None:
                 shutil.rmtree(old, ignore_errors=True)
         finally:
@@ -778,7 +778,7 @@ class Library:
     def reorder(self, ids: list[str]) -> None:
         current = {m["id"]: m for m in self.settings["mods"]}
         if sorted(ids) != sorted(current):
-            raise ModError("모드 목록이 바뀌었어요. 새로고침 후 다시 시도해 주세요.")
+            raise ModError(t("err.order_changed"))
         self.settings["mods"] = [current[i] for i in ids]
         self.save()
 
@@ -938,12 +938,7 @@ class Library:
         dest.mkdir(parents=True)
         for name in names:
             shutil.move(str(data_dir / name), str(dest / name))
-        (dest / "백업 안내.txt").write_text(
-            "모드 매니저가 적용하기 전에 게임 data 폴더에 있던 모드 파일을 옮겨 둔 곳입니다.\n"
-            f"원래 위치: {data_dir}\n"
-            "다시 쓰려면 이 파일들을 원래 위치로 복사하세요.\n",
-            encoding="utf-8",
-        )
+        (dest / t("backup.file_name")).write_text(t("backup.text", path=data_dir), encoding="utf-8")
         return dest
 
     @staticmethod
@@ -973,7 +968,7 @@ class Library:
             try:
                 backup = self._backup(data_dir, unmanaged)
             except OSError as exc:
-                raise ModError(f"기존 모드 파일을 백업 폴더로 옮기지 못했어요: {exc}") from None
+                raise ModError(t("err.backup_failed", detail=exc)) from None
         return data_dir, recorded, present, backup
 
     def _remove_recorded(self, data_dir: Path, recorded: dict, present: list[str]) -> list[dict]:
@@ -998,7 +993,7 @@ class Library:
         leftovers = self._remove_recorded(data_dir, recorded, present)
         if leftovers:
             self._save_record(game_path, leftovers, None, [])
-            raise ModError("이전에 설치한 파일을 지우지 못했어요. 게임이 완전히 꺼졌는지 확인한 뒤 다시 시도해 주세요.")
+            raise ModError(t("err.remove_previous_failed"))
         written: dict[str, dict] = {}
         mods: dict[str, dict] = {}
         complete = False
@@ -1021,9 +1016,9 @@ class Library:
                 mods[item.mod_id]["targets"].append(item.target)
             complete = True
         except PermissionError:
-            raise ModError("게임 폴더에 파일을 쓸 권한이 없어요. 게임을 끄고, 그래도 안 되면 관리자 권한으로 실행해 보세요.") from None
+            raise ModError(t("err.no_write_permission")) from None
         except OSError as exc:
-            raise ModError(f"파일을 복사하는 중 오류가 났어요: {exc}") from None
+            raise ModError(t("err.copy_failed", detail=exc)) from None
         finally:
             signature = plan_signature(plan) if complete else None
             self._save_record(game_path, list(written.values()), signature, list(mods.values()))
@@ -1040,7 +1035,7 @@ class Library:
         leftovers = self._remove_recorded(data_dir, recorded, present)
         self._save_record(game_path, leftovers, None, [])
         if leftovers:
-            raise ModError("일부 파일을 지우지 못했어요. 게임이 완전히 꺼졌는지 확인한 뒤 다시 시도해 주세요.")
+            raise ModError(t("err.remove_some_failed"))
         return {"removed": removed - len(leftovers), "backup": str(backup) if backup else None}
 
 
@@ -1079,7 +1074,7 @@ def analyze(snapshot: list[ModSnapshot], game_version: str | None) -> dict[str, 
         add = issues[snap.id].append
         extra = snap.info.extra or {}
         if snap.enabled and not snap.sets:
-            add({"level": "warn", "text": "지금 고른 옵션으로는 설치할 파일이 없어요. 옵션을 확인해 주세요."})
+            add({"level": "warn", "text": t("issue.no_files")})
         if snap.enabled:
             for req in extra.get("requires", []):
                 if req.get("requiredFor") and _feature_turned_off(snap, req["requiredFor"]):
@@ -1088,38 +1083,37 @@ def analyze(snapshot: list[ModSnapshot], game_version: str | None) -> dict[str, 
                 providers = list(found.values())
                 active = [p for p in providers if p.enabled]
                 revisions = [version_key(p.info.extra["revision"]) for p in active if (p.info.extra or {}).get("revision")]
-                need = f" ({req['revision']} 이상)" if req["revision"] else ""
-                where = f" 받는 곳: {req['repository']}" if req.get("repository") else ""
+                need = t("issue.at_least", revision=req["revision"]) if req["revision"] else ""
+                where = t("issue.get_from", url=req["repository"]) if req.get("repository") else ""
                 if req.get("optional"):
                     # 일부 기능에만 필요한 모드: 없어도 나머지는 작동하므로 안내만 한다
                     purpose = f" ({req['requiredFor']})" if req.get("requiredFor") else ""
                     if not active:
-                        add({"level": "info", "text": f"‘{req['name']}’{need}는 일부 기능에만 필요해요{purpose}. "
-                                                      f"그 기능을 쓰지 않으면 없어도 돼요.{where}"})
+                        add({"level": "info", "text": t("issue.optional_requirement", name=req["name"], need=need,
+                                                        purpose=purpose, where=where)})
                     continue
                 if not providers:
-                    add({"level": "error", "text": f"‘{req['name']}’{need} 모드가 필요해요. 따로 받아서 목록에 추가해 주세요.{where}"})
+                    add({"level": "error", "text": t("issue.requirement_missing", name=req["name"], need=need, where=where)})
                 elif not active:
-                    add({"level": "error", "text": f"필요한 모드 ‘{req['name']}’가 꺼져 있어요. 켜 주세요."})
+                    add({"level": "error", "text": t("issue.requirement_disabled", name=req["name"])})
                 elif req["revision"] and revisions and all(r < version_key(req["revision"]) for r in revisions):
-                    add({"level": "warn", "text": f"‘{req['name']}’를 {req['revision']} 이상으로 업데이트해야 해요."})
+                    add({"level": "warn", "text": t("issue.requirement_outdated", name=req["name"], revision=req["revision"])})
             if _is_shared_loader(snap.info):
                 mine = {ps.archive for ps in snap.sets}
                 position = next(i for i, s in enumerate(enabled) if s is snap)
                 if any(mine & {ps.archive for ps in later.sets} for later in enabled[position + 1:]):
                     add({
                         "level": "warn", "fix": "bottom",
-                        "text": "공유 로더는 목록 맨 아래에 있어야 다른 모드를 제대로 불러와요.",
+                        "text": t("issue.loader_last"),
                     })
             key = extra.get("name", snap.info.name).lower()
             if name_count.get(key, 0) > 1:
-                add({"level": "warn", "text": "같은 모드가 두 개 켜져 있어요. 하나만 켜 두세요."})
+                add({"level": "warn", "text": t("issue.duplicate")})
         mod_version = extra.get("exeVersion")
         if game_version and mod_version and version_key(mod_version) != version_key(game_version):
             if version_key(mod_version) < version_key(game_version):
-                text = (f"게임 버전 {mod_version} 기준으로 만든 모드예요 (현재 게임 {game_version}). "
-                        "대부분 그대로 작동하지만, 문제가 생기면 새 버전이 있는지 확인해 보세요.")
+                text = t("issue.older_game", mod=mod_version, game=game_version)
             else:
-                text = f"더 새로운 게임 버전 {mod_version}용 모드예요 (현재 게임 {game_version}). 게임을 업데이트해 주세요."
+                text = t("issue.newer_game", mod=mod_version, game=game_version)
             add({"level": "info", "text": text})
     return issues

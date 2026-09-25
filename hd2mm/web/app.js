@@ -3,6 +3,20 @@
 const TOKEN = document.querySelector('meta[name="hd2mm-token"]').content;
 const $ = (id) => document.getElementById(id);
 
+// ------------------------------------------------------------ 언어 (서버가 <html lang>에 넣어 준다)
+const LANG = document.documentElement.lang === 'en' ? 'en' : 'ko';
+function t(key, params = {}) {
+  const text = I18N[LANG][key] ?? I18N.ko[key] ?? key;
+  return text.replace(/\{(\w+)\}/g, (match, name) => (name in params ? String(params[name]) : match));
+}
+
+function applyStaticText() {
+  document.title = t('app.title');
+  document.querySelectorAll('[data-i18n]').forEach((el) => { el.textContent = t(el.dataset.i18n); });
+  document.querySelectorAll('[data-i18n-title]').forEach((el) => { el.title = t(el.dataset.i18nTitle); });
+  document.querySelectorAll('[data-i18n-aria]').forEach((el) => { el.setAttribute('aria-label', t(el.dataset.i18nAria)); });
+}
+
 // ------------------------------------------------------------ 아이콘
 const svg = (inner, fill = 'none') =>
   `<svg viewBox="0 0 24 24" fill="${fill}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`;
@@ -61,7 +75,7 @@ function fmtTime(iso) {
   const pad = (v) => String(v).padStart(2, '0');
   const time = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
   const today = new Date();
-  if (d.toDateString() === today.toDateString()) return `오늘 ${time}`;
+  if (d.toDateString() === today.toDateString()) return t('time.today', { time });
   return `${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())} ${time}`;
 }
 
@@ -84,10 +98,10 @@ async function api(path, { body, file } = {}) {
   try {
     res = await fetch(path, init);
   } catch {
-    throw new ApiError('모드 매니저 프로그램과 연결이 끊겼어요. 창을 닫고 다시 실행해 주세요.', 0, null);
+    throw new ApiError(t('err.disconnected'), 0, null);
   }
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new ApiError(data.error || `요청이 실패했어요 (${res.status})`, res.status, data);
+  if (!res.ok) throw new ApiError(data.error || t('err.request_failed', { status: res.status }), res.status, data);
   return data;
 }
 
@@ -131,17 +145,17 @@ function renderTop() {
   const g = state.game;
   const chip = $('gameChip');
   if (g.problem) {
-    chip.replaceChildren(h('span', { class: 'dot err' }), h('span', { class: 'chip-text' }, '게임 폴더를 설정해 주세요'));
+    chip.replaceChildren(h('span', { class: 'dot err' }), h('span', { class: 'chip-text' }, t('chip.set_game')));
   } else {
     chip.replaceChildren(
       h('span', { class: `dot ${g.running ? 'warn' : 'ok'}` }),
       h('span', { class: 'chip-text' },
         h('b', null, 'Helldivers 2'),
         g.version ? ` · v${g.version}` : '',
-        g.running ? ' · 실행 중' : ''),
+        g.running ? t('chip.running') : ''),
     );
   }
-  chip.title = g.path ? `게임 폴더: ${g.path}` : '게임 폴더 설정';
+  chip.title = g.path ? t('chip.title_path', { path: g.path }) : t('chip.title');
 }
 
 function renderStatus() {
@@ -154,45 +168,43 @@ function renderStatus() {
   switch (s.state) {
     case 'nogame':
       tone = 'err';
-      title = '게임 폴더를 찾지 못했어요';
-      lines.push(`${g.problem} 오른쪽 위 ⚙ 설정에서 게임 폴더를 지정해 주세요.`);
+      title = t('status.nogame.title');
+      lines.push(t('status.nogame.line', { problem: g.problem }));
       break;
     case 'empty':
-      title = state.mods.length ? '켜진 모드가 없어요' : '아직 추가한 모드가 없어요';
-      lines.push(state.mods.length
-        ? '사용할 모드를 켜고 [적용하기]를 누르세요.'
-        : '[+ 모드 추가]를 누르거나 모드 압축 파일을 창에 끌어다 놓으세요.');
+      title = state.mods.length ? t('status.empty.title_some') : t('status.empty.title_none');
+      lines.push(state.mods.length ? t('status.empty.line_some') : t('status.empty.line_none'));
       break;
     case 'pending':
       tone = 'warn';
-      title = '아직 게임에 적용하지 않았어요';
-      lines.push(`[적용하기]를 누르면 켜진 모드 ${enabled}개가 게임에 설치돼요.`);
+      title = t('status.pending.title');
+      lines.push(t('status.pending.line', { count: enabled }));
       break;
     case 'dirty':
       tone = 'warn';
-      title = '바뀐 내용이 아직 게임에 반영되지 않았어요';
-      lines.push('[적용하기]를 눌러야 게임에 반영돼요.');
+      title = t('status.dirty.title');
+      lines.push(t('status.dirty.line'));
       break;
     case 'broken':
       tone = 'err';
-      title = '설치했던 모드 파일 일부가 사라졌어요';
-      lines.push('게임 업데이트나 파일 무결성 검사 때문일 수 있어요. [적용하기]를 다시 눌러 주세요.');
+      title = t('status.broken.title');
+      lines.push(t('status.broken.line'));
       break;
     case 'ok':
       tone = 'ok';
-      title = '게임에 적용된 상태예요';
-      lines.push(`모드 ${s.deployedMods}개 · 파일 ${s.deployedFiles}개 · ${fmtTime(s.deployedAt)} 적용`);
+      title = t('status.ok.title');
+      lines.push(t('status.ok.line', { mods: s.deployedMods, files: s.deployedFiles, time: fmtTime(s.deployedAt) }));
       break;
     default:
       title = '';
   }
   if (s.unmanaged?.length) {
-    lines.push({ cls: 'warn', text: `이 매니저가 설치하지 않은 모드 파일 ${s.unmanaged.length}개가 게임 폴더에 있어요. 적용할 때 백업 폴더로 옮겨 드려요.` });
+    lines.push({ cls: 'warn', text: t('status.unmanaged', { count: s.unmanaged.length }) });
   }
   for (const other of s.otherDeployments || []) {
-    lines.push({ cls: 'warn', text: `다른 게임 폴더(${other.gamePath})에 이 매니저가 설치한 모드 파일 ${other.files}개가 남아 있어요. 설정에서 그 폴더로 바꾼 뒤 [모두 제거]로 정리할 수 있어요.` });
+    lines.push({ cls: 'warn', text: t('status.other_deployment', { path: other.gamePath, count: other.files }) });
   }
-  if (g.running) lines.push({ cls: 'err', text: '게임이 실행 중이에요. 적용·제거하려면 게임을 먼저 꺼 주세요.' });
+  if (g.running) lines.push({ cls: 'err', text: t('status.game_running') });
 
   $('statusBar').className = `statusbar tone-${tone}`;
   $('statusTitle').textContent = title;
@@ -202,11 +214,11 @@ function renderStatus() {
   const deployBtn = $('deployBtn');
   deployBtn.disabled = !!busy || s.state === 'nogame';
   deployBtn.classList.toggle('attention', !busy && needsDeploy());
-  deployBtn.replaceChildren(...(busy === 'deploy' ? [h('span', { class: 'spinner' }), '적용 중…'] : ['적용하기']));
+  deployBtn.replaceChildren(...(busy === 'deploy' ? [h('span', { class: 'spinner' }), t('btn.applying')] : [t('btn.apply')]));
   const purgeBtn = $('purgeBtn');
   purgeBtn.disabled = !!busy || s.state === 'nogame' || (!s.deployedFiles && !s.unmanaged?.length);
-  purgeBtn.replaceChildren(...(busy === 'purge' ? [h('span', { class: 'spinner' }), '제거 중…'] : ['모두 제거']));
-  $('launchBtn').replaceChildren(icon('play'), '게임 실행');
+  purgeBtn.replaceChildren(...(busy === 'purge' ? [h('span', { class: 'spinner' }), t('btn.removing')] : [t('btn.remove_all')]));
+  $('launchBtn').replaceChildren(icon('play'), t('btn.launch'));
 }
 
 // ------------------------------------------------------------ 모드 목록
@@ -222,7 +234,7 @@ function thumb(url, cls) {
 }
 
 function modSwitch(checked, label, onChange) {
-  return h('label', { class: 'switch', title: checked ? '켜짐 — 누르면 꺼요' : '꺼짐 — 누르면 켜요', onclick: (e) => e.stopPropagation() },
+  return h('label', { class: 'switch', title: checked ? t('switch.on_title') : t('switch.off_title'), onclick: (e) => e.stopPropagation() },
     h('input', { type: 'checkbox', checked, 'aria-label': label, onchange: (e) => onChange(e.target.checked) }),
     h('span', { class: 'track' }));
 }
@@ -240,9 +252,9 @@ function renderList() {
     const worst = worstIssue(m);
     const meta = [];
     if (m.version) meta.push(h('span', { class: 'badge accent' }, m.version));
-    if (m.error) meta.push(h('span', { class: 'badge err' }, '불러오기 오류'));
-    else if (m.mode === 'multi' || m.mode === 'single') meta.push(h('span', { class: 'badge' }, '옵션'));
-    meta.push(h('span', null, m.enabled ? '켜짐' : '꺼짐'));
+    if (m.error) meta.push(h('span', { class: 'badge err' }, t('mod.load_error')));
+    else if (m.mode === 'multi' || m.mode === 'single') meta.push(h('span', { class: 'badge' }, t('mod.options')));
+    meta.push(h('span', null, m.enabled ? t('mod.on') : t('mod.off')));
     return h('li', {
       class: `mod-item${m.id === selectedId ? ' selected' : ''}${m.enabled ? '' : ' off'}`,
       draggable: 'true',
@@ -260,20 +272,20 @@ function renderList() {
         }
       },
     },
-    h('span', { class: 'grip', title: '끌어서 순서 바꾸기', html: ICONS.grip }),
-    modSwitch(m.enabled, `${m.name} 켜기`, (v) => toggleMod(m.id, v)),
+    h('span', { class: 'grip', title: t('mod.drag'), html: ICONS.grip }),
+    modSwitch(m.enabled, t('switch.aria', { name: m.name }), (v) => toggleMod(m.id, v)),
     thumb(m.icon, 'thumb'),
     h('div', { class: 'mod-main' },
       h('div', { class: 'mod-name', title: m.name }, m.name),
       h('div', { class: 'mod-meta' }, meta)),
     worst
-      ? h('span', { class: `issue-flag ${worst}`, title: '확인할 내용이 있어요' }, icon(worst === 'error' ? 'error' : 'warn'))
+      ? h('span', { class: `issue-flag ${worst}`, title: t('mod.has_issues') }, icon(worst === 'error' ? 'error' : 'warn'))
       : h('span'));
   });
   list.replaceChildren(
-    h('li', { class: 'list-edge', 'aria-hidden': 'true' }, '먼저 적용'),
+    h('li', { class: 'list-edge', 'aria-hidden': 'true' }, t('list.first')),
     ...items,
-    h('li', { class: 'list-edge bottom', 'aria-hidden': 'true' }, '마지막 적용 · 가장 높은 우선순위'),
+    h('li', { class: 'list-edge bottom', 'aria-hidden': 'true' }, t('list.last')),
   );
 }
 
@@ -291,8 +303,7 @@ function renderDetail() {
   const m = modById(selectedId);
   if (!m) {
     panel.replaceChildren(h('div', { class: 'detail-empty' },
-      h('div', null, h('strong', null, '모드를 추가해 보세요'),
-        '왼쪽 목록에서 모드를 고르면 자세한 정보와 옵션이 여기에 보여요.')));
+      h('div', null, h('strong', null, t('detail.empty_title')), t('detail.empty_text'))));
     return;
   }
   const keepScroll = panel.dataset.mod === m.id ? panel.scrollTop : 0;
@@ -313,8 +324,8 @@ function hero(m) {
   }
   const badges = [];
   if (m.version) badges.push(h('span', { class: 'badge accent' }, m.version));
-  badges.push(h('span', { class: `badge ${m.enabled ? 'ok' : ''}` }, m.enabled ? '켜짐' : '꺼짐'));
-  if (m.gameVersion) badges.push(h('span', { class: 'badge' }, `게임 ${m.gameVersion} 기준`));
+  badges.push(h('span', { class: `badge ${m.enabled ? 'ok' : ''}` }, m.enabled ? t('mod.on') : t('mod.off')));
+  if (m.gameVersion) badges.push(h('span', { class: 'badge' }, t('detail.game_version', { version: m.gameVersion })));
   box.append(h('div', { class: 'hero-text' }, h('h1', null, m.name), h('div', { class: 'hero-badges' }, badges)));
   return box;
 }
@@ -324,19 +335,19 @@ function toolbar(m) {
   const last = state.mods.length - 1;
   return h('div', { class: 'toolbar' },
     h('div', { class: 'toggle-label' },
-      modSwitch(m.enabled, `${m.name} 켜기`, (v) => toggleMod(m.id, v)),
-      h('span', null, m.enabled ? '사용 중' : '사용 안 함')),
+      modSwitch(m.enabled, t('switch.aria', { name: m.name }), (v) => toggleMod(m.id, v)),
+      h('span', null, m.enabled ? t('detail.in_use') : t('detail.not_in_use'))),
     h('span', { class: 'spacer' }),
-    h('button', { class: 'btn small', type: 'button', title: '위로 (우선순위 낮추기)', disabled: index <= 0, onclick: () => moveMod(m.id, (from) => from - 1) }, icon('up'), '위로'),
-    h('button', { class: 'btn small', type: 'button', title: '아래로 (우선순위 높이기)', disabled: index >= last, onclick: () => moveMod(m.id, (from) => from + 1) }, icon('down'), '아래로'),
-    h('button', { class: 'btn small', type: 'button', title: '맨 아래로 (가장 높은 우선순위)', disabled: index >= last, onclick: () => moveMod(m.id, (_, length) => length - 1) }, icon('bottom'), '맨 아래로'),
-    h('button', { class: 'btn small', type: 'button', title: '모드 파일이 있는 폴더 열기', onclick: () => openFolder('mod', m.id) }, icon('folder'), '폴더'),
-    h('button', { class: 'btn small danger', type: 'button', onclick: () => deleteMod(m) }, icon('trash'), '삭제'));
+    h('button', { class: 'btn small', type: 'button', title: t('detail.up_title'), disabled: index <= 0, onclick: () => moveMod(m.id, (from) => from - 1) }, icon('up'), t('detail.up')),
+    h('button', { class: 'btn small', type: 'button', title: t('detail.down_title'), disabled: index >= last, onclick: () => moveMod(m.id, (from) => from + 1) }, icon('down'), t('detail.down')),
+    h('button', { class: 'btn small', type: 'button', title: t('detail.bottom_title'), disabled: index >= last, onclick: () => moveMod(m.id, (_, length) => length - 1) }, icon('bottom'), t('detail.bottom')),
+    h('button', { class: 'btn small', type: 'button', title: t('detail.folder_title'), onclick: () => openFolder('mod', m.id) }, icon('folder'), t('detail.folder')),
+    h('button', { class: 'btn small danger', type: 'button', onclick: () => deleteMod(m) }, icon('trash'), t('btn.delete')));
 }
 
 function callouts(m) {
   const items = [];
-  if (m.error) items.push({ level: 'error', text: `이 모드를 읽지 못했어요: ${m.error}` });
+  if (m.error) items.push({ level: 'error', text: t('detail.read_error', { error: m.error }) });
   items.push(...m.issues);
   if (!items.length) return null;
   const iconFor = { error: 'error', warn: 'warn', info: 'info' };
@@ -344,13 +355,13 @@ function callouts(m) {
     icon(iconFor[issue.level] || 'info'),
     h('div', { class: 'callout-text' }, issue.text),
     issue.fix === 'bottom'
-      ? h('button', { class: 'btn small', type: 'button', onclick: () => moveMod(m.id, (_, length) => length - 1) }, '맨 아래로 옮기기')
+      ? h('button', { class: 'btn small', type: 'button', onclick: () => moveMod(m.id, (_, length) => length - 1) }, t('detail.move_bottom'))
       : null)));
 }
 
 function description(m) {
   if (!m.description) return null;
-  return h('div', { class: 'section' }, h('h3', null, '설명'), h('div', { class: 'desc' }, m.description));
+  return h('div', { class: 'section' }, h('h3', null, t('detail.description')), h('div', { class: 'desc' }, m.description));
 }
 
 function options(m) {
@@ -374,7 +385,7 @@ function options(m) {
           h('div', { class: 'option-name' }, o.name),
           o.description ? h('div', { class: 'option-desc' }, o.description) : null,
           o.subs.length ? h('select', {
-            'aria-label': `${o.name} 세부 선택`, disabled: !on,
+            'aria-label': t('detail.suboption_aria', { name: o.name }), disabled: !on,
             onchange: (e) => {
               const value = Number(e.target.value);
               setModState(m.id, (s) => ({ selectedSubs: replaceAt(s.selectedSubs, i, value) }));
@@ -389,24 +400,24 @@ function options(m) {
       h('div', null, h('div', { class: 'option-name' }, o.name), o.description ? h('div', { class: 'option-desc' }, o.description) : null),
       o.image ? h('img', { class: 'option-img', src: o.image, alt: '', draggable: 'false' }) : h('span')));
   }
-  const title = m.mode === 'single' ? '버전 고르기 (하나만)' : '옵션';
+  const title = m.mode === 'single' ? t('detail.choose_one') : t('detail.options');
   return h('div', { class: 'section' }, h('h3', null, title), h('div', { class: 'options' }, rows));
 }
 
 function files(m) {
   if (m.error) return null;
   const note = m.enabled
-    ? '각 파일은 짝 파일(.gpu_resources, .stream)과 함께 설치돼요. 번호는 목록 순서에 따라 자동으로 매겨져요.'
-    : '모드를 켜면 설치될 이름이 정해져요.';
+    ? t('files.note_on')
+    : t('files.note_off');
   const body = m.files.length
     ? h('table', { class: 'files' },
-      h('thead', null, h('tr', null, h('th', null, '모드 안의 파일'), h('th'), h('th', null, '게임에 설치될 이름'), h('th', null, '크기'))),
+      h('thead', null, h('tr', null, h('th', null, t('files.source')), h('th'), h('th', null, t('files.target')), h('th', null, t('files.size')))),
       h('tbody', null, m.files.map((f) => h('tr', null,
         h('td', null, f.source), h('td', { class: 'arrow' }, '→'),
         h('td', null, f.target || '—'), h('td', { class: 'muted' }, fmtSize(f.size))))))
-    : h('p', { class: 'muted' }, '지금 설정으로는 설치할 파일이 없어요.');
+    : h('p', { class: 'muted' }, t('files.none'));
   return fold(`${m.id}:files`,
-    h('summary', null, '설치될 파일', h('span', { class: 'muted' }, `${m.files.length}세트`)),
+    h('summary', null, t('files.title'), h('span', { class: 'muted' }, t('files.sets', { count: m.files.length }))),
     h('div', { class: 'fold-body' }, body, h('p', { class: 'muted', style: 'margin:8px 0 0;font-size:12.5px' }, note)));
 }
 
@@ -433,10 +444,10 @@ function loadReadme(m) {
 
 function readme(m) {
   if (!m.hasReadme) return null;
-  const pre = h('pre', { class: 'readme' }, '불러오는 중…');
+  const pre = h('pre', { class: 'readme' }, t('common.loading'));
   const show = () => loadReadme(m).then((text) => { pre.textContent = text; }, (e) => { pre.textContent = e.message; });
   const details = fold(`${m.id}:readme`,
-    h('summary', null, '제작자 설명서 (README)'),
+    h('summary', null, t('readme.title')),
     h('div', { class: 'fold-body' }, pre));
   details.addEventListener('toggle', () => { if (details.open) show(); });
   if (details.open) show();
@@ -446,17 +457,17 @@ function readme(m) {
 function metaInfo(m) {
   const rows = [];
   const add = (k, v) => v && rows.push(h('dt', null, k), h('dd', null, v));
-  add('원본 파일', m.sourceName);
-  add('추가한 날', fmtTime(m.addedAt));
-  add('업데이트한 날', fmtTime(m.updatedAt));
-  add('기준 게임 버전', m.gameVersion);
-  add('필요한 모드', (m.requires || []).map((r) => {
-    const label = r.revision ? `${r.name} (${r.revision} 이상)` : r.name;
-    return r.optional ? `${label} — 선택: 일부 기능용` : label;
+  add(t('meta.source'), m.sourceName);
+  add(t('meta.added'), fmtTime(m.addedAt));
+  add(t('meta.updated'), fmtTime(m.updatedAt));
+  add(t('meta.game_version'), m.gameVersion);
+  add(t('meta.requires'), (m.requires || []).map((r) => {
+    const label = r.revision ? t('meta.at_least', { name: r.name, revision: r.revision }) : r.name;
+    return r.optional ? t('meta.optional', { label }) : label;
   }).join(', '));
-  add('모드 ID', m.guid ? h('span', { class: 'mono' }, m.guid) : null);
+  add(t('meta.guid'), m.guid ? h('span', { class: 'mono' }, m.guid) : null);
   if (!rows.length) return null;
-  return h('div', { class: 'section' }, h('h3', null, '정보'), h('dl', { class: 'meta-grid' }, rows));
+  return h('div', { class: 'section' }, h('h3', null, t('meta.title')), h('dl', { class: 'meta-grid' }, rows));
 }
 
 // ------------------------------------------------------------ 동작
@@ -497,17 +508,17 @@ function moveMod(id, toIndex) {
 
 async function deleteMod(m) {
   const ok = await openModal({
-    title: '모드를 삭제할까요?',
+    title: t('delete.title'),
     body: [
-      h('p', null, `‘${m.name}’을(를) 모드 목록과 보관함에서 지워요.`),
-      h('p', { class: 'muted' }, '게임에 이미 설치된 파일은 다음에 [적용하기]를 누를 때 함께 빠져요.'),
+      h('p', null, t('delete.text', { name: m.name })),
+      h('p', { class: 'muted' }, t('delete.note')),
     ],
-    actions: [{ label: '취소', value: false }, { label: '삭제', kind: 'danger-solid', value: true }],
+    actions: [{ label: t('btn.cancel'), value: false }, { label: t('btn.delete'), kind: 'danger-solid', value: true }],
   });
   if (!ok) return;
   await mutate(async () => {
     await api(`/api/mods/${enc(m.id)}/delete`, { body: {} });
-    toast('ok', `‘${m.name}’을(를) 삭제했어요.`);
+    toast('ok', t('delete.done', { name: m.name }));
   });
 }
 
@@ -523,10 +534,10 @@ async function importFiles(fileList) {
   const files = [...fileList];
   const accepted = files.filter((f) => /\.(zip|7z|rar)$/i.test(f.name));
   const rejected = files.filter((f) => !accepted.includes(f));
-  if (rejected.length) toast('warn', `압축 파일(.zip, .7z, .rar)만 추가할 수 있어요: ${rejected.map((f) => f.name).join(', ')}`);
+  if (rejected.length) toast('warn', t('import.only_archives', { names: rejected.map((f) => f.name).join(', ') }));
   if (!accepted.length) return;
   if (busy) {
-    toast('warn', '지금은 다른 작업을 하고 있어요. 끝난 뒤 다시 추가해 주세요.');
+    toast('warn', t('import.busy'));
     return;
   }
   busy = 'import';
@@ -534,13 +545,13 @@ async function importFiles(fileList) {
   const progress = toast('loading', '', { sticky: true });
   try {
     for (const [i, file] of accepted.entries()) {
-      progress.update('loading', `‘${file.name}’ 추가하는 중…${accepted.length > 1 ? ` (${i + 1}/${accepted.length})` : ''}`);
+      progress.update('loading', t('import.progress', { name: file.name, counter: accepted.length > 1 ? ` (${i + 1}/${accepted.length})` : '' }));
       try {
         const r = await queuedApi(`/api/import?name=${enc(file.name)}`, { file });
         selectedId = r.id;
-        if (!r.updated) toast('ok', `‘${r.name}’ 모드를 추가했어요.`);
-        else if (r.previousName && r.previousName !== r.name) toast('ok', `‘${r.previousName}’을(를) ‘${r.name}’(으)로 업데이트했어요. (같은 모드 ID)`);
-        else toast('ok', `‘${r.name}’ 모드를 새 파일로 바꿨어요.`);
+        if (!r.updated) toast('ok', t('import.added', { name: r.name }));
+        else if (r.previousName && r.previousName !== r.name) toast('ok', t('import.renamed', { old: r.previousName, name: r.name }));
+        else toast('ok', t('import.replaced', { name: r.name }));
       } catch (e) {
         toast('err', `${file.name}: ${e.message}`);
       }
@@ -576,24 +587,24 @@ async function runGameAction(kind) {
     const broken = state.mods.filter((m) => m.enabled && (m.error || m.issues.some((i) => i.level === 'error')));
     if (broken.length) {
       const ok = await openModal({
-        title: '확인이 필요한 모드가 있어요',
+        title: t('confirm_broken.title'),
         body: [
-          h('p', null, '아래 모드는 필요한 모드가 빠졌거나 문제가 있어 게임에서 제대로 작동하지 않을 수 있어요.'),
-          h('ul', { class: 'file-groups' }, broken.map((m) => h('li', null, h('span', null, m.name), h('span', { class: 'badge err' }, '확인 필요')))),
-          h('p', { class: 'muted' }, '모드를 눌러 오른쪽의 안내를 확인해 보세요.'),
+          h('p', null, t('confirm_broken.text')),
+          h('ul', { class: 'file-groups' }, broken.map((m) => h('li', null, h('span', null, m.name), h('span', { class: 'badge err' }, t('confirm_broken.badge'))))),
+          h('p', { class: 'muted' }, t('confirm_broken.note')),
         ],
-        actions: [{ label: '취소', value: false }, { label: '그래도 적용', kind: 'primary', value: true }],
+        actions: [{ label: t('btn.cancel'), value: false }, { label: t('confirm_broken.apply'), kind: 'primary', value: true }],
       });
       if (!ok) return false;
     }
   } else {
     const ok = await openModal({
-      title: '게임에서 모드를 모두 제거할까요?',
+      title: t('purge.title'),
       body: [
-        h('p', null, '이 매니저가 게임 폴더에 설치한 모드 파일을 지워서 게임을 원래 상태로 되돌려요.'),
-        h('p', { class: 'muted' }, '모드 목록(보관함)은 그대로 남아서 언제든 다시 [적용하기]로 설치할 수 있어요.'),
+        h('p', null, t('purge.text')),
+        h('p', { class: 'muted' }, t('purge.note')),
       ],
-      actions: [{ label: '취소', value: false }, { label: '모두 제거', kind: 'danger-solid', value: true }],
+      actions: [{ label: t('btn.cancel'), value: false }, { label: t('btn.remove_all'), kind: 'danger-solid', value: true }],
     });
     if (!ok) return false;
   }
@@ -606,10 +617,10 @@ async function runGameAction(kind) {
     for (;;) {
       try {
         const r = await queuedApi(`/api/${kind}`, { body: { unmanaged: mode } });
-        const moved = r.backup ? ' 원래 있던 모드 파일은 백업 폴더로 옮겼어요.' : '';
-        if (kind === 'purge') toast('ok', `게임에서 모드 파일 ${r.removed}개를 제거했어요.${moved}`);
-        else if (r.modCount) toast('ok', `적용 완료! 모드 ${r.modCount}개(파일 ${r.fileCount}개)를 게임에 설치했어요.${moved}`);
-        else toast('ok', `켜진 모드가 없어서 게임에서 모드 파일을 모두 뺐어요.${moved}`);
+        const moved = r.backup ? t('result.moved') : '';
+        if (kind === 'purge') toast('ok', t('result.purged', { count: r.removed, moved }));
+        else if (r.modCount) toast('ok', t('result.deployed', { mods: r.modCount, files: r.fileCount, moved }));
+        else toast('ok', t('result.cleared', { moved }));
         success = true;
         break;
       } catch (e) {
@@ -638,22 +649,22 @@ async function runGameAction(kind) {
 function confirmUnmanaged(groups, kind) {
   const unknown = groups.filter((g) => !g.match).length;
   const body = [
-    h('p', null, '이 매니저가 설치하지 않은 모드 파일이 게임 폴더에 있어요. 다른 모드 매니저(Arsenal, HD2MM 등)로 설치했거나 직접 넣은 파일일 수 있어요.'),
+    h('p', null, t('unmanaged.text')),
     h('ul', { class: 'file-groups' }, groups.map((g) => h('li', null,
-      h('span', null, h('span', { class: 'mono' }, g.name), g.files.length > 1 ? h('span', { class: 'muted' }, ` 외 ${g.files.length - 1}개`) : null),
+      h('span', null, h('span', { class: 'mono' }, g.name), g.files.length > 1 ? h('span', { class: 'muted' }, t('unmanaged.more', { count: g.files.length - 1 })) : null),
       g.match
-        ? h('span', { class: 'badge ok', title: '보관함에 있는 모드와 내용이 같아요' }, `‘${g.match}’와 같음`)
-        : h('span', { class: 'badge warn' }, g.size ? `알 수 없음 · ${fmtSize(g.size)}` : '알 수 없음')))),
+        ? h('span', { class: 'badge ok', title: t('unmanaged.same_title') }, t('unmanaged.same', { name: g.match }))
+        : h('span', { class: 'badge warn' }, g.size ? t('unmanaged.unknown_size', { size: fmtSize(g.size) }) : t('unmanaged.unknown'))))),
     h('p', null, kind === 'deploy'
-      ? '번호가 겹치지 않도록 이 파일들을 백업 폴더로 옮긴 뒤 적용할게요. 지우는 게 아니라서 필요하면 백업 폴더에서 되찾을 수 있어요.'
-      : '이 파일들도 백업 폴더로 옮길까요? 지우는 게 아니라서 필요하면 되찾을 수 있어요.'),
+      ? t('unmanaged.deploy_text')
+      : t('unmanaged.purge_text')),
   ];
-  if (unknown) body.push(h('p', { class: 'muted' }, '‘알 수 없음’ 모드를 계속 쓰려면, 그 모드의 원본 압축 파일을 이 매니저에 추가해 주세요.'));
-  body.push(h('p', { class: 'muted' }, '다른 모드 매니저와 함께 쓰면 서로의 파일을 지울 수 있어서, 한 가지만 쓰는 걸 권장해요.'));
+  if (unknown) body.push(h('p', { class: 'muted' }, t('unmanaged.unknown_note')));
+  body.push(h('p', { class: 'muted' }, t('unmanaged.one_manager')));
   const actions = kind === 'deploy'
-    ? [{ label: '취소', value: null }, { label: '백업 폴더로 옮기고 적용', kind: 'primary', value: 'move' }]
-    : [{ label: '취소', value: null }, { label: '매니저 파일만 제거', value: 'keep' }, { label: '백업 폴더로 옮기기', kind: 'primary', value: 'move' }];
-  return openModal({ title: '게임 폴더에 다른 모드 파일이 있어요', body, actions, wide: true });
+    ? [{ label: t('btn.cancel'), value: null }, { label: t('unmanaged.move_apply'), kind: 'primary', value: 'move' }]
+    : [{ label: t('btn.cancel'), value: null }, { label: t('unmanaged.keep'), value: 'keep' }, { label: t('unmanaged.move'), kind: 'primary', value: 'move' }];
+  return openModal({ title: t('unmanaged.title'), body, actions, wide: true });
 }
 
 async function launchGame() {
@@ -661,16 +672,16 @@ async function launchGame() {
   await settlePendingChanges();
   if (needsDeploy() && !state.game.running) {
     const choice = await openModal({
-      title: '아직 적용하지 않은 변경이 있어요',
-      body: h('p', null, '지금 실행하면 바뀐 모드 설정이 게임에 반영되지 않아요. 적용하고 실행할까요?'),
-      actions: [{ label: '취소', value: null }, { label: '그냥 실행', value: 'launch' }, { label: '적용하고 실행', kind: 'primary', value: 'deploy' }],
+      title: t('launch.title'),
+      body: h('p', null, t('launch.text')),
+      actions: [{ label: t('btn.cancel'), value: null }, { label: t('launch.anyway'), value: 'launch' }, { label: t('launch.apply'), kind: 'primary', value: 'deploy' }],
     });
     if (!choice) return;
     if (choice === 'deploy' && !(await runGameAction('deploy'))) return;
   }
   try {
     await queuedApi('/api/launch-game', { body: {} });
-    toast('ok', 'Steam으로 게임을 실행하고 있어요.');
+    toast('ok', t('launch.started'));
   } catch (e) {
     toast('err', e.message);
   }
@@ -690,7 +701,7 @@ async function checkForUpdate({ manual = false } = {}) {
     return;
   }
   renderUpdateBar();
-  if (manual && !updateInfo.newer) toast('ok', `최신 버전(v${updateInfo.current})을 쓰고 있어요.`);
+  if (manual && !updateInfo.newer) toast('ok', t('update.latest', { version: updateInfo.current }));
 }
 
 function renderUpdateBar() {
@@ -701,45 +712,45 @@ function renderUpdateBar() {
   bar.replaceChildren(
     h('div', { class: 'update-text' },
       icon('upload'),
-      h('span', null, h('strong', null, `새 버전 v${u.latest}이 나왔어요`), h('span', { class: 'muted' }, ` · 지금 v${u.current}`))),
+      h('span', null, h('strong', null, t('update.available', { version: u.latest })), h('span', { class: 'muted' }, t('update.current', { version: u.current })))),
     h('div', { class: 'status-actions' },
-      h('button', { class: 'btn ghost small', type: 'button', onclick: () => openFolder('release') }, '변경 내용'),
+      h('button', { class: 'btn ghost small', type: 'button', onclick: () => openFolder('release') }, t('update.changes')),
       u.canInstall
-        ? h('button', { class: 'btn primary small', type: 'button', onclick: installUpdate }, '업데이트')
-        : h('button', { class: 'btn small', type: 'button', title: u.problem || '', onclick: () => openFolder('release') }, '받으러 가기')));
+        ? h('button', { class: 'btn primary small', type: 'button', onclick: installUpdate }, t('update.install'))
+        : h('button', { class: 'btn small', type: 'button', title: u.problem || '', onclick: () => openFolder('release') }, t('update.download'))));
 }
 
 async function installUpdate() {
   if (busy || !updateInfo?.canInstall) return;
   const ok = await openModal({
-    title: `v${updateInfo.latest}(으)로 업데이트할까요?`,
+    title: t('update.confirm_title', { version: updateInfo.latest }),
     body: [
-      h('p', null, '새 버전을 내려받은 뒤 Modocracy가 잠깐 꺼졌다가 새 버전으로 다시 켜져요.'),
-      h('p', { class: 'muted' }, '추가한 모드와 설정은 그대로 남아요. 게임에 설치된 모드도 바뀌지 않아요.'),
+      h('p', null, t('update.confirm_text')),
+      h('p', { class: 'muted' }, t('update.confirm_note')),
     ],
-    actions: [{ label: '나중에', value: false }, { label: '업데이트', kind: 'primary', value: true }],
+    actions: [{ label: t('btn.later'), value: false }, { label: t('update.install'), kind: 'primary', value: true }],
   });
   if (!ok || busy) return;
   await settlePendingChanges();
   busy = 'update';
   render();
-  const progress = toast('loading', '새 버전을 내려받는 중이에요…', { sticky: true });
+  const progress = toast('loading', t('update.downloading'), { sticky: true });
   try {
     const r = await api('/api/update/install', { body: {} });
     restarting = true;
     progress.close();
     restartOverlay = h('div', { class: 'disconnected' }, h('div', null,
-      h('strong', null, `v${r.version}(으)로 다시 켜는 중이에요`),
-      h('span', { class: 'muted' }, '창이 닫혔다가 새 버전으로 다시 열려요. 잠시만 기다려 주세요.')));
+      h('strong', null, t('update.restarting', { version: r.version })),
+      h('span', { class: 'muted' }, t('update.restarting_note'))));
     document.body.append(restartOverlay);
   } catch (e) {
     progress.close();
     busy = null;
     render();
     const open = await openModal({
-      title: '자동 업데이트를 하지 못했어요',
-      body: [h('p', null, e.message), h('p', { class: 'muted' }, '릴리즈 페이지에서 새 Modocracy.exe를 직접 받아 바꿔 넣어도 돼요.')],
-      actions: [{ label: '닫기', value: false }, { label: '릴리즈 페이지 열기', kind: 'primary', value: true }],
+      title: t('update.failed_title'),
+      body: [h('p', null, e.message), h('p', { class: 'muted' }, t('update.failed_note'))],
+      actions: [{ label: t('btn.close'), value: false }, { label: t('update.open_releases'), kind: 'primary', value: true }],
     });
     if (open) openFolder('release');
   }
@@ -748,65 +759,78 @@ async function installUpdate() {
 // ------------------------------------------------------------ 설정
 function openSettings() {
   const updateToggle = h('input', { type: 'checkbox', checked: state?.checkUpdates !== false });
+  const languageSelect = h('select', { id: 'languageSelect' },
+    [['auto', t('settings.language_auto')], ['ko', '한국어'], ['en', 'English']].map(([value, label]) =>
+      h('option', { value, selected: (state?.language || 'auto') === value }, label)));
   const input = h('input', {
     type: 'text', id: 'gamePathInput', value: state?.game.path || '', spellcheck: 'false',
     placeholder: 'C:\\Program Files (x86)\\Steam\\steamapps\\common\\Helldivers 2',
   });
-  const help = h('div', { class: 'help' }, 'bin 폴더와 data 폴더가 들어 있는 Helldivers 2 설치 폴더예요.');
+  const help = h('div', { class: 'help' }, t('settings.game_help'));
   const setHelp = (cls, text) => { help.className = `help ${cls}`; help.textContent = text; };
   const browse = h('button', {
     class: 'btn', type: 'button',
     onclick: async () => {
       try {
         const r = await queuedApi('/api/pick-folder', { body: {} });
-        if (r.path) { input.value = r.path; setHelp('', '폴더를 골랐어요. [저장]을 눌러 주세요.'); }
+        if (r.path) { input.value = r.path; setHelp('', t('settings.picked')); }
       } catch (e) { setHelp('err', e.message); }
     },
-  }, icon('folder'), '찾아보기');
+  }, icon('folder'), t('settings.browse'));
   const detect = h('button', {
     class: 'btn', type: 'button',
     onclick: async () => {
       try {
         const r = await queuedApi('/api/detect-game', { body: {} });
-        if (r.path) { input.value = r.path; setHelp('ok', '게임 폴더를 찾았어요. [저장]을 눌러 주세요.'); }
-        else setHelp('err', '자동으로 찾지 못했어요. [찾아보기]로 직접 골라 주세요.');
+        if (r.path) { input.value = r.path; setHelp('ok', t('settings.found')); }
+        else setHelp('err', t('settings.not_found'));
       } catch (e) { setHelp('err', e.message); }
     },
-  }, '자동으로 찾기');
+  }, t('settings.detect'));
   const body = [
     h('div', { class: 'field' },
-      h('label', { for: 'gamePathInput' }, '게임 설치 폴더'),
+      h('label', { for: 'gamePathInput' }, t('settings.game_folder')),
       h('div', { class: 'row' }, input),
       h('div', { class: 'row' }, browse, detect),
       help),
     h('div', { class: 'field' },
-      h('label', null, '모드 보관 폴더'),
+      h('label', null, t('settings.library')),
       h('div', { class: 'path-box' }, state?.paths.library || ''),
-      h('div', { class: 'help' }, '추가한 모드, 설정, 백업이 여기에 저장돼요.'),
+      h('div', { class: 'help' }, t('settings.library_help')),
       h('div', { class: 'row' },
-        h('button', { class: 'btn small', type: 'button', onclick: () => openFolder('library') }, icon('folder'), '보관 폴더 열기'),
-        h('button', { class: 'btn small', type: 'button', onclick: () => openFolder('backups') }, icon('folder'), '백업 폴더 열기'),
-        h('button', { class: 'btn small', type: 'button', onclick: () => openFolder('log') }, '로그 보기'))),
+        h('button', { class: 'btn small', type: 'button', onclick: () => openFolder('library') }, icon('folder'), t('settings.open_library')),
+        h('button', { class: 'btn small', type: 'button', onclick: () => openFolder('backups') }, icon('folder'), t('settings.open_backups')),
+        h('button', { class: 'btn small', type: 'button', onclick: () => openFolder('log') }, t('settings.view_log')))),
     h('div', { class: 'field' },
-      h('label', null, '업데이트'),
-      h('label', { class: 'check-row' }, updateToggle, '켤 때 새 버전이 있는지 확인하기'),
+      h('label', { for: 'languageSelect' }, t('settings.language')),
+      h('div', { class: 'row' }, languageSelect)),
+    h('div', { class: 'field' },
+      h('label', null, t('settings.updates')),
+      h('label', { class: 'check-row' }, updateToggle, t('settings.check_on_start')),
       h('div', { class: 'row' },
-        h('button', { class: 'btn small', type: 'button', onclick: () => checkForUpdate({ manual: true }) }, '지금 확인'),
-        h('span', { class: 'help' }, `지금 버전: Modocracy v${state?.appVersion || ''}`))),
-    state && !state.sevenZip ? h('p', { class: 'muted', style: 'font-size:12.5px' }, '7-Zip이 없어 .7z/.rar 파일은 추가할 수 없어요.') : null,
+        h('button', { class: 'btn small', type: 'button', onclick: () => checkForUpdate({ manual: true }) }, t('settings.check_now')),
+        h('span', { class: 'help' }, t('settings.version', { version: state?.appVersion || '' })))),
+    state && !state.sevenZip ? h('p', { class: 'muted', style: 'font-size:12.5px' }, t('settings.no_7zip')) : null,
   ];
   return openModal({
-    title: '설정',
+    title: t('settings.title'),
     body,
     actions: [
-      { label: '닫기', value: null },
+      { label: t('btn.close'), value: null },
       {
-        label: '저장', kind: 'primary', value: true,
+        label: t('btn.save'), kind: 'primary', value: true,
         onClick: async () => {
           try {
-            await queuedApi('/api/settings', { body: { gamePath: input.value, checkUpdates: updateToggle.checked } });
-            toast('ok', '설정을 저장했어요.');
+            await queuedApi('/api/settings', {
+              body: { gamePath: input.value, checkUpdates: updateToggle.checked, language: languageSelect.value },
+            });
             await refresh();
+            // 언어가 바뀌면 화면 전체를 새 언어로 다시 불러온다
+            if (state?.lang && state.lang !== LANG) {
+              location.reload();
+              return true;
+            }
+            toast('ok', t('settings.saved'));
             return true;
           } catch (e) {
             setHelp('err', e.message);
@@ -871,13 +895,13 @@ function toast(kind, text, { sticky = false } = {}) {
   const textEl = h('div', { class: 'toast-text' });
   const lead = h('span');
   const el = h('div', { class: 'toast', role: kind === 'err' ? 'alert' : 'status' }, lead, textEl,
-    h('button', { class: 'toast-close', type: 'button', 'aria-label': '닫기', onclick: () => close() }, icon('x')));
+    h('button', { class: 'toast-close', type: 'button', 'aria-label': t('btn.close'), onclick: () => close() }, icon('x')));
   let timer = null;
   const close = () => { clearTimeout(timer); el.remove(); };
-  const update = (k, t) => {
+  const update = (k, message) => {
     el.className = `toast ${k}`;
     lead.replaceChildren(k === 'loading' ? h('span', { class: 'spinner' }) : icon({ ok: 'ok', err: 'error', warn: 'warn' }[k] || 'info'));
-    textEl.textContent = t;
+    textEl.textContent = message;
     clearTimeout(timer);
     if (!sticky) timer = setTimeout(close, k === 'err' ? 9000 : 5000);
   };
@@ -977,13 +1001,13 @@ function watchConnection() {
       if (restarting) {
         // Edge 창으로 열었을 때는 이 창이 저절로 닫히지 않는다: 새 창이 따로 열린다고 알려 준다
         restartOverlay?.replaceChildren(h('div', null,
-          h('strong', null, '업데이트를 마치면 새 창이 열려요'),
-          h('span', { class: 'muted' }, '이 창은 닫아도 돼요.')));
+          h('strong', null, t('update.new_window')),
+          h('span', { class: 'muted' }, t('update.close_this'))));
         return;
       }
       overlay = h('div', { class: 'disconnected' }, h('div', null,
-        h('strong', null, '모드 매니저가 종료되었어요'),
-        h('span', { class: 'muted' }, '이 창을 닫고 모드 매니저를 다시 실행해 주세요.')));
+        h('strong', null, t('disconnected.title')),
+        h('span', { class: 'muted' }, t('disconnected.text'))));
       document.body.append(overlay);
     }, 4000);
   });
@@ -1003,6 +1027,7 @@ function sizeAppWindow() {
 }
 
 function init() {
+  applyStaticText();
   $('settingsBtn').replaceChildren(icon('settings'));
   document.querySelectorAll('.empty-icon').forEach((el) => { el.innerHTML = ICONS.upload; });
   $('addBtn').addEventListener('click', () => $('fileInput').click());

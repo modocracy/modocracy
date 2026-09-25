@@ -9,6 +9,8 @@ import sys
 import time
 from pathlib import Path
 
+from .i18n import t
+
 STEAM_APP_ID = 553850
 GAME_EXE = "helldivers2.exe"
 DEFAULT_GAME_PATH = r"C:\Program Files (x86)\Steam\steamapps\common\Helldivers 2"
@@ -29,11 +31,11 @@ def check_game_path(raw) -> tuple[Path | None, str | None]:
     """(게임 폴더, 문제 설명) 을 돌려준다. 문제가 없으면 설명은 None."""
     path = normalize_game_path(raw)
     if path is None:
-        return None, "게임 폴더가 아직 설정되지 않았어요."
+        return None, t("game.not_set")
     if not path.is_dir():
-        return path, "설정된 게임 폴더가 존재하지 않아요."
+        return path, t("game.missing")
     if not (path / "data").is_dir():
-        return path, "Helldivers 2 폴더가 아닌 것 같아요 (data 폴더가 없어요)."
+        return path, t("game.not_hd2")
     return path, None
 
 

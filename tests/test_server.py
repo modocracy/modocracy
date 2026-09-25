@@ -14,7 +14,7 @@ import urllib.request
 from pathlib import Path
 from unittest import mock
 
-from hd2mm import app, gameinfo
+from hd2mm import app, gameinfo, i18n
 from hd2mm.app import web_dir
 from hd2mm.core import Library
 from hd2mm.server import AppServer, Handler, RASTER_TYPES
@@ -280,6 +280,9 @@ class ServerTests(unittest.TestCase):
 
 
 class InstanceTests(unittest.TestCase):
+    def setUp(self):
+        self.addCleanup(i18n.set_language, i18n.current())  # main()이 Windows 언어로 바꾼다
+
     def test_mutex_name_handle_and_existing_instance(self):
         import ctypes
 

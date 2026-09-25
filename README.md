@@ -54,6 +54,12 @@ Arsenal, HD2MM에서 쓰는 모드 압축 파일(`manifest.json` 포함)을 그�
 - 새 버전이 제대로 켜지지 않으면 이전 버전으로 자동으로 되돌립니다.
 - exe가 쓰기 금지된 폴더(예: Program Files)에 있는 등 자동 업데이트를 할 수 없으면, 릴리즈 페이지를 열어 직접 받을 수 있게 안내합니다.
 
+## 언어 / Language
+
+화면은 Windows 표시 언어가 한국어면 한국어로, 그 밖에는 영어로 나옵니다. ⚙ 설정의 **언어** 에서 바꿀 수 있습니다.
+
+The app is shown in English unless Windows is set to Korean. You can change it in ⚙ Settings → **Language**.
+
 ## 파일 저장 위치
 
 추가한 모드, 설정, 백업, 로그는 `%LOCALAPPDATA%\Modocracy` 에 저장됩니다(설정 화면에서 열 수 있음).
@@ -76,6 +82,7 @@ build.bat                                          :: .venv를 만들어 필요�
 - `hd2mm/server.py` — 화면과 로직을 잇는 로컬 서버(127.0.0.1 전용)
 - `hd2mm/app.py` — 실행, 전용 창(pywebview) 열기, 중복 실행 방지(이미 켜져 있으면 그 창을 앞으로)
 - `hd2mm/web/` — 화면(HTML·CSS·JS)
+- `hd2mm/i18n.py`, `hd2mm/web/i18n.js` — 한국어·영어 문구 사전 (서버 쪽 / 화면 쪽)
 - 적용 규칙: 켜진 모드를 목록 위→아래 순서로 훑으며, 같은 아카이브(`9ba626afa44a3aa3` 등)의 패치 파일에
   `patch_0, patch_1, …` 번호를 새로 매겨 게임 `data` 폴더에 복사합니다. 매니저가 설치한 파일 목록은
   `deployed.json` 에 기록해 두었다가 다음 적용·제거 때 정확히 그 파일만 지웁니다.

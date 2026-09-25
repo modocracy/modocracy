@@ -13,7 +13,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
-from . import __version__, gameinfo, updater
+from . import __version__, gameinfo, i18n, updater
+from .i18n import t
 from .core import Library, ModError, NeedsConfirm, analyze, mtime_ns, safe_join
 
 log = logging.getLogger(__name__)
@@ -22,6 +23,7 @@ STATIC_FILES = {
     "/": "index.html",
     "/index.html": "index.html",
     "/app.js": "app.js",
+    "/i18n.js": "i18n.js",
     "/style.css": "style.css",
     "/icon.svg": "icon.svg",
 }
@@ -160,14 +162,14 @@ class Handler(BaseHTTPRequestHandler):
     def _read_json(self) -> dict:
         length = int(self.headers.get("Content-Length") or 0)
         if length > MAX_JSON_BYTES:
-            raise ModError("요청이 너무 커요.")
+            raise ModError(t("err.request_too_large"))
         raw = self.rfile.read(length) if length else b"{}"
         try:
             data = json.loads(raw.decode("utf-8") or "{}")
         except (ValueError, UnicodeDecodeError):
-            raise ModError("잘못된 요청이에요.") from None
+            raise ModError(t("err.bad_request")) from None
         if not isinstance(data, dict):
-            raise ModError("잘못된 요청이에요.")
+            raise ModError(t("err.bad_request"))
         return data
 
     # ---- GET
@@ -212,7 +214,7 @@ class Handler(BaseHTTPRequestHandler):
             pass
         except Exception:  # noqa: BLE001 - 화면에 알리고 기록
             log.exception("GET %s 실패", self.path)
-            self._error("알 수 없는 오류가 났어요. 로그 파일을 확인해 주세요.", 500)
+            self._error(t("err.unknown"), 500)
 
     def _static(self, name: str) -> None:
         file = self.server.web_dir / name
@@ -220,6 +222,7 @@ class Handler(BaseHTTPRequestHandler):
         if name == "index.html":
             data = data.replace(b"__HD2MM_TOKEN__", self.server.token.encode())
             data = data.replace(b"__HD2MM_VERSION__", __version__.encode())
+            data = data.replace(b"__HD2MM_LANG__", i18n.current().encode())
         ctype = {
             ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
             ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml",
@@ -276,8 +279,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._error("forbidden", 403)
         if not self.server.begin_operation():
             if self.server.updating:
-                return self._error("새 버전으로 업데이트하는 중이에요. 잠시만 기다려 주세요.", 503)
-            return self._error("프로그램이 종료 중이에요. 다시 실행해 주세요.", 503)
+                return self._error(t("err.updating"), 503)
+            return self._error(t("err.shutting_down"), 503)
         try:
             self._handle_post()
         finally:
@@ -299,14 +302,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._error("not found", 404)
             self._send_json(result)
         except NeedsConfirm as exc:
-            self._error("확인이 필요해요.", 409, needsConfirm="unmanaged", unmanaged=exc.unmanaged)
+            self._error(t("err.needs_confirm"), 409, needsConfirm="unmanaged", unmanaged=exc.unmanaged)
         except ModError as exc:
             self._error(str(exc))
         except (ConnectionError, TimeoutError):
             pass
         except Exception:  # noqa: BLE001
             log.exception("POST %s 실패", self.path)
-            self._error("알 수 없는 오류가 났어요. 로그 파일을 확인해 주세요.", 500)
+            self._error(t("err.unknown"), 500)
 
     def _post(self, path: str, body: dict):
         lib = self.server.library
@@ -314,7 +317,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/order":
             ids = body.get("ids")
             if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
-                raise ModError("잘못된 요청이에요.")
+                raise ModError(t("err.bad_request"))
             lib.reorder(ids)
             return {"ok": True}
         if len(parts) == 3 and parts[:2] == ["api", "mods"]:
@@ -326,20 +329,26 @@ class Handler(BaseHTTPRequestHandler):
         if path in ("/api/deploy", "/api/purge"):
             game = _require_game(lib)
             if gameinfo.is_game_running():
-                raise ModError("게임이 실행 중이에요. 게임을 완전히 끈 뒤 다시 시도해 주세요.")
+                raise ModError(t("err.game_running"))
             mode = body.get("unmanaged", "ask")
             if mode not in ("ask", "move", "keep") or (path == "/api/deploy" and mode == "keep"):
-                raise ModError("잘못된 요청이에요.")
+                raise ModError(t("err.bad_request"))
             action = lib.deploy if path == "/api/deploy" else lib.purge
             result = action(game, mode)
             log.info("%s 완료: %s", path, result)
             return result
         if path == "/api/settings":
+            if "language" in body and body["language"] not in i18n.SETTINGS:
+                raise ModError(t("err.bad_request"))
             if "gamePath" in body:
                 game, problem = gameinfo.check_game_path(body.get("gamePath"))
                 if problem and game is not None and not body.get("force"):
                     raise ModError(problem)
                 lib.set_game_path(str(game) if game else None)
+            if "language" in body:
+                lib.settings["language"] = body["language"]
+                lib.save()
+                i18n.set_language(i18n.resolve(body["language"]))
             if "checkUpdates" in body:
                 lib.settings["checkUpdates"] = bool(body["checkUpdates"])
                 lib.save()
@@ -362,7 +371,7 @@ class Handler(BaseHTTPRequestHandler):
     def _import(self, name: str) -> None:
         name = Path(name.replace("\\", "/")).name
         if not name:
-            return self._error("파일 이름이 없어요.")
+            return self._error(t("err.no_file_name"))
         lib = self.server.library
         length = int(self.headers.get("Content-Length") or 0)
         upload = lib.tmp_dir / f"upload-{uuid.uuid4().hex}{Path(name).suffix.lower()}"
@@ -376,7 +385,7 @@ class Handler(BaseHTTPRequestHandler):
                     out.write(chunk)
                     remaining -= len(chunk)
             if remaining:
-                return self._error("파일을 끝까지 받지 못했어요. 다시 시도해 주세요.")
+                return self._error(t("err.upload_incomplete"))
             with self.server.lock:
                 result = lib.import_archive(upload, name)
             log.info("모드 추가: %s -> %s", name, result)
@@ -390,13 +399,13 @@ class Handler(BaseHTTPRequestHandler):
 def _require_game(lib: Library) -> Path:
     game, problem = gameinfo.check_game_path(lib.game_path)
     if problem:
-        raise ModError(problem + " 설정에서 게임 폴더를 지정해 주세요.")
+        raise ModError(t("err.set_game_folder", problem=problem))
     return game
 
 
 def _pick_folder(server: AppServer, initial: str | None) -> str | None:
     if not server.dialog_lock.acquire(blocking=False):
-        raise ModError("폴더 선택 창이 이미 열려 있어요.")
+        raise ModError(t("err.dialog_open"))
     try:
         start = initial if initial and Path(initial).is_dir() else None
         if server.folder_picker:  # 전용 앱 창: 창에 딸린 Windows 폴더 선택 창
@@ -410,7 +419,7 @@ def _pick_folder(server: AppServer, initial: str | None) -> str | None:
         root.attributes("-topmost", True)
         try:
             chosen = filedialog.askdirectory(
-                parent=root, title="Helldivers 2 설치 폴더 선택", mustexist=True, initialdir=start,
+                parent=root, title=t("dialog.pick_game_folder"), mustexist=True, initialdir=start,
             )
         finally:
             root.destroy()
@@ -436,9 +445,9 @@ def _open_target(lib: Library, body: dict) -> dict:
         os.startfile(updater.RELEASES_PAGE)  # noqa: S606 - 정해진 릴리즈 페이지만 연다
         return {"ok": True}
     else:
-        raise ModError("잘못된 요청이에요.")
+        raise ModError(t("err.bad_request"))
     if not path.exists():
-        raise ModError("열 폴더가 없어요.")
+        raise ModError(t("err.folder_missing"))
     os.startfile(str(path))  # noqa: S606 - 탐색기로 열기
     return {"ok": True}
 
@@ -463,15 +472,15 @@ def _install_update(server: AppServer) -> dict:
     """새 버전을 받아 검사하고, 이 프로그램이 끝나면 바꿔 끼워 다시 켜지도록 한다."""
     with server.client_lock:
         if server.updating:
-            raise ModError("이미 업데이트하는 중이에요.")
+            raise ModError(t("err.already_updating"))
         if server.active_operations > 1:  # 이 요청 말고 진행 중인 작업(적용 등)
-            raise ModError("다른 작업이 진행 중이에요. 끝난 뒤 다시 시도해 주세요.")
+            raise ModError(t("err.busy_try_later"))
         server.updating = True  # 여기서부터 다른 변경 작업은 받지 않는다
     scheduled = False
     try:
         release = updater.fetch_latest()
         if not updater.is_newer(release.version):
-            raise ModError("이미 최신 버전이에요.")
+            raise ModError(t("err.already_latest"))
         problem = updater.install_problem(release)
         if problem:
             raise ModError(problem)
@@ -479,7 +488,7 @@ def _install_update(server: AppServer) -> dict:
         new_file = updater.download(release, exe)
         if server.stopping:  # 받는 동안 창을 닫았으면 업데이트하지 않는다
             new_file.unlink(missing_ok=True)
-            raise ModError("창을 닫아서 업데이트를 취소했어요.")
+            raise ModError(t("err.update_cancelled"))
         updater.schedule_swap(exe, new_file)
         scheduled = True
     finally:
@@ -560,6 +569,8 @@ def build_state(lib: Library) -> dict:
     return {
         "appVersion": __version__,
         "checkUpdates": lib.settings.get("checkUpdates", True),
+        "language": lib.settings.get("language", "auto"),  # 설정값: auto / ko / en
+        "lang": i18n.current(),  # 지금 쓰는 언어
         "game": {
             "path": str(game) if game else None,
             "problem": problem,
