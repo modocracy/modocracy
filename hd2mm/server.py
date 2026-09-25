@@ -13,7 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
-from . import __version__, gameinfo
+from . import __version__, gameinfo, updater
 from .core import Library, ModError, NeedsConfirm, analyze, mtime_ns, safe_join
 
 log = logging.getLogger(__name__)
@@ -27,7 +27,9 @@ STATIC_FILES = {
 }
 MAX_JSON_BYTES = 1024 * 1024
 # 보관함을 건드리지 않는 요청. 폴더 선택 창처럼 오래 걸려도 다른 요청을 막지 않도록 잠금 없이 처리한다.
-LOCK_FREE_POSTS = {"/api/pick-folder", "/api/detect-game"}
+# 업데이트 설치도 보관함을 건드리지 않는다 (내려받는 동안 화면이 멈추지 않도록)
+LOCK_FREE_POSTS = {"/api/pick-folder", "/api/detect-game", "/api/update/install"}
+UPDATE_CHECK_SECONDS = 30 * 60  # 새 버전 확인 결과를 다시 쓰는 시간
 RASTER_TYPES = {
     ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
     ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp",
@@ -53,6 +55,8 @@ class AppServer(ThreadingHTTPServer):
         # 전용 앱 창으로 실행할 때 app.py가 채운다: 창에 딸린 폴더 선택 창, 창을 앞으로 가져오기
         self.folder_picker = None
         self.on_focus = None
+        self.on_exit = None  # 전용 창이면 창을 닫는 함수 (업데이트 후 다시 켤 때 쓴다)
+        self.update_cache: tuple[float, updater.Release] | None = None
         if auto_exit:
             self.start_auto_exit()
 
@@ -99,6 +103,18 @@ class AppServer(ThreadingHTTPServer):
         with self.client_lock:
             self.active_operations -= 1
             self.last_change = time.monotonic()
+
+    def request_exit(self) -> None:
+        """프로그램을 끝낸다 (업데이트한 새 버전으로 다시 켜기 위해)."""
+        if self.on_exit:
+            self.on_exit()  # 창이 닫히면 app.py가 진행 중인 작업을 기다렸다가 끝낸다
+            return
+
+        def stop() -> None:
+            self.finish_operations(timeout=300)
+            self.shutdown()
+
+        threading.Thread(target=stop, daemon=True).start()
 
     def finish_operations(self, timeout: float) -> bool:
         """새 작업은 받지 않고, 진행 중인 작업(적용 등)이 끝날 때까지 기다린다. 끝났으면 True."""
@@ -169,6 +185,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send_json(build_state(self.server.library))
             if path == "/api/events":
                 return self._events()
+            if path == "/api/update":
+                return self._send_json(update_info(self.server, force="force" in query))
             if path == "/api/focus":
                 # 두 번째로 실행했을 때 이미 열린 창을 앞으로 가져온다 (창을 보여 주는 것 말고는 하는 일이 없다)
                 focus = self.server.on_focus
@@ -309,12 +327,17 @@ class Handler(BaseHTTPRequestHandler):
             log.info("%s 완료: %s", path, result)
             return result
         if path == "/api/settings":
-            raw = body.get("gamePath")
-            game, problem = gameinfo.check_game_path(raw)
-            if problem and game is not None and not body.get("force"):
-                raise ModError(problem)
-            lib.set_game_path(str(game) if game else None)
+            if "gamePath" in body:
+                game, problem = gameinfo.check_game_path(body.get("gamePath"))
+                if problem and game is not None and not body.get("force"):
+                    raise ModError(problem)
+                lib.set_game_path(str(game) if game else None)
+            if "checkUpdates" in body:
+                lib.settings["checkUpdates"] = bool(body["checkUpdates"])
+                lib.save()
             return {"ok": True}
+        if path == "/api/update/install":
+            return _install_update(self.server)
         if path == "/api/detect-game":
             return {"path": gameinfo.detect_game_path()}
         if path == "/api/pick-folder":
@@ -399,12 +422,51 @@ def _open_target(lib: Library, body: dict) -> dict:
         path = path / "data" if target == "data" else path
     elif target == "log":
         path = lib.data_dir / "log.txt"
+    elif target == "release":
+        os.startfile(updater.RELEASES_PAGE)  # noqa: S606 - 정해진 릴리즈 페이지만 연다
+        return {"ok": True}
     else:
         raise ModError("잘못된 요청이에요.")
     if not path.exists():
         raise ModError("열 폴더가 없어요.")
     os.startfile(str(path))  # noqa: S606 - 탐색기로 열기
     return {"ok": True}
+
+
+def update_info(server: AppServer, force: bool = False) -> dict:
+    """새 버전이 있는지. GitHub에 너무 자주 묻지 않도록 결과를 잠시 기억해 둔다."""
+    now = time.monotonic()
+    cached = server.update_cache
+    if force or cached is None or now - cached[0] > UPDATE_CHECK_SECONDS:
+        cached = (now, updater.fetch_latest())
+        server.update_cache = cached
+    release = cached[1]
+    newer = updater.is_newer(release.version)
+    problem = updater.install_problem(release) if newer else None
+    return {
+        "current": __version__, "latest": release.version, "newer": newer,
+        "url": release.url, "notes": release.notes, "canInstall": newer and problem is None, "problem": problem,
+    }
+
+
+def _install_update(server: AppServer) -> dict:
+    """새 버전을 받아 검사하고, 이 프로그램이 끝나면 바꿔 끼워 다시 켜지도록 한다."""
+    with server.client_lock:
+        others = server.active_operations - 1  # 이 요청 말고 진행 중인 작업(적용 등)
+    if others > 0:
+        raise ModError("다른 작업이 진행 중이에요. 끝난 뒤 다시 시도해 주세요.")
+    release = updater.fetch_latest()
+    if not updater.is_newer(release.version):
+        raise ModError("이미 최신 버전이에요.")
+    problem = updater.install_problem(release)
+    if problem:
+        raise ModError(problem)
+    exe = updater.current_exe()
+    new_file = updater.download(release, exe)
+    updater.schedule_swap(exe, new_file)
+    log.info("업데이트 준비 완료: %s -> %s", __version__, release.version)
+    threading.Timer(1.0, server.request_exit).start()  # 응답을 보낸 뒤 끝낸다
+    return {"restarting": True, "version": release.version}
 
 
 def build_state(lib: Library) -> dict:
@@ -475,6 +537,7 @@ def build_state(lib: Library) -> dict:
         mods.append(mod)
     return {
         "appVersion": __version__,
+        "checkUpdates": lib.settings.get("checkUpdates", True),
         "game": {
             "path": str(game) if game else None,
             "problem": problem,

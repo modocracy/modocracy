@@ -676,8 +676,70 @@ async function launchGame() {
   }
 }
 
+// ------------------------------------------------------------ 앱 업데이트
+let updateInfo = null;
+let restarting = false;
+
+async function checkForUpdate({ manual = false } = {}) {
+  try {
+    updateInfo = await api(`/api/update${manual ? '?force=1' : ''}`);
+  } catch (e) {
+    if (manual) toast('err', e.message);  // 켤 때 자동 확인이 실패하면 조용히 넘어간다
+    return;
+  }
+  renderUpdateBar();
+  if (manual && !updateInfo.newer) toast('ok', `최신 버전(v${updateInfo.current})을 쓰고 있어요.`);
+}
+
+function renderUpdateBar() {
+  const bar = $('updateBar');
+  const u = updateInfo;
+  bar.hidden = !u?.newer;
+  if (bar.hidden) return;
+  bar.replaceChildren(
+    h('div', { class: 'update-text' },
+      icon('upload'),
+      h('span', null, h('strong', null, `새 버전 v${u.latest}이 나왔어요`), h('span', { class: 'muted' }, ` · 지금 v${u.current}`))),
+    h('div', { class: 'status-actions' },
+      h('button', { class: 'btn ghost small', type: 'button', onclick: () => openFolder('release') }, '변경 내용'),
+      u.canInstall
+        ? h('button', { class: 'btn primary small', type: 'button', onclick: installUpdate }, '업데이트')
+        : h('button', { class: 'btn small', type: 'button', title: u.problem || '', onclick: () => openFolder('release') }, '받으러 가기')));
+}
+
+async function installUpdate() {
+  if (busy || !updateInfo?.canInstall) return;
+  const ok = await openModal({
+    title: `v${updateInfo.latest}(으)로 업데이트할까요?`,
+    body: [
+      h('p', null, '새 버전을 내려받은 뒤 Modocracy가 잠깐 꺼졌다가 새 버전으로 다시 켜져요.'),
+      h('p', { class: 'muted' }, '추가한 모드와 설정은 그대로 남아요. 게임에 설치된 모드도 바뀌지 않아요.'),
+    ],
+    actions: [{ label: '나중에', value: false }, { label: '업데이트', kind: 'primary', value: true }],
+  });
+  if (!ok || busy) return;
+  await settlePendingChanges();
+  busy = 'update';
+  render();
+  const progress = toast('loading', '새 버전을 내려받는 중이에요…', { sticky: true });
+  try {
+    const r = await api('/api/update/install', { body: {} });
+    restarting = true;
+    progress.close();
+    document.body.append(h('div', { class: 'disconnected' }, h('div', null,
+      h('strong', null, `v${r.version}(으)로 다시 켜는 중이에요`),
+      h('span', { class: 'muted' }, '창이 닫혔다가 새 버전으로 다시 열려요. 잠시만 기다려 주세요.'))));
+  } catch (e) {
+    progress.close();
+    busy = null;
+    render();
+    toast('err', e.message);
+  }
+}
+
 // ------------------------------------------------------------ 설정
 function openSettings() {
+  const updateToggle = h('input', { type: 'checkbox', checked: state?.checkUpdates !== false });
   const input = h('input', {
     type: 'text', id: 'gamePathInput', value: state?.game.path || '', spellcheck: 'false',
     placeholder: 'C:\\Program Files (x86)\\Steam\\steamapps\\common\\Helldivers 2',
@@ -717,7 +779,13 @@ function openSettings() {
         h('button', { class: 'btn small', type: 'button', onclick: () => openFolder('library') }, icon('folder'), '보관 폴더 열기'),
         h('button', { class: 'btn small', type: 'button', onclick: () => openFolder('backups') }, icon('folder'), '백업 폴더 열기'),
         h('button', { class: 'btn small', type: 'button', onclick: () => openFolder('log') }, '로그 보기'))),
-    h('p', { class: 'muted', style: 'font-size:12.5px' }, `Modocracy v${state?.appVersion || ''}${state && !state.sevenZip ? ' · 7-Zip이 없어 .7z/.rar 파일은 추가할 수 없어요' : ''}`),
+    h('div', { class: 'field' },
+      h('label', null, '업데이트'),
+      h('label', { class: 'check-row' }, updateToggle, '켤 때 새 버전이 있는지 확인하기'),
+      h('div', { class: 'row' },
+        h('button', { class: 'btn small', type: 'button', onclick: () => checkForUpdate({ manual: true }) }, '지금 확인'),
+        h('span', { class: 'help' }, `지금 버전: Modocracy v${state?.appVersion || ''}`))),
+    state && !state.sevenZip ? h('p', { class: 'muted', style: 'font-size:12.5px' }, '7-Zip이 없어 .7z/.rar 파일은 추가할 수 없어요.') : null,
   ];
   return openModal({
     title: '설정',
@@ -728,8 +796,8 @@ function openSettings() {
         label: '저장', kind: 'primary', value: true,
         onClick: async () => {
           try {
-            await queuedApi('/api/settings', { body: { gamePath: input.value } });
-            toast('ok', '게임 폴더를 저장했어요.');
+            await queuedApi('/api/settings', { body: { gamePath: input.value, checkUpdates: updateToggle.checked } });
+            toast('ok', '설정을 저장했어요.');
             await refresh();
             return true;
           } catch (e) {
@@ -898,6 +966,7 @@ function watchConnection() {
     if (lostTimer || overlay) return;
     lostTimer = setTimeout(() => {
       lostTimer = null;
+      if (restarting) return;
       overlay = h('div', { class: 'disconnected' }, h('div', null,
         h('strong', null, '모드 매니저가 종료되었어요'),
         h('span', { class: 'muted' }, '이 창을 닫고 모드 매니저를 다시 실행해 주세요.')));
@@ -949,6 +1018,7 @@ function init() {
   watchConnection();
   refresh().then(() => {
     if (state?.game.problem) openSettings();
+    if (state?.checkUpdates) checkForUpdate();
   });
 }
 

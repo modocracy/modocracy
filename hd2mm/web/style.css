@@ -106,6 +106,18 @@ button { cursor: pointer; }
 .status-sub .line.err { color: var(--err); }
 .status-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
+/* ---------- 새 버전 안내 */
+.updatebar {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  margin: 16px 22px 0; padding: 10px 12px 10px 16px;
+  border-radius: var(--radius); border: 1px solid rgba(111, 181, 255, .35);
+  background: linear-gradient(90deg, var(--info-soft), var(--panel) 55%);
+}
+.update-text { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.update-text .ico { color: var(--info); font-size: 18px; }
+.check-row { display: flex; align-items: center; gap: 8px; font-weight: 400; cursor: pointer; }
+.check-row input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
+
 /* ---------- 버튼 */
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 7px;
@@ -398,7 +410,7 @@ table.files td.arrow { color: var(--faint); font-family: var(--font); }
 }
 @media (max-width: 560px) {
   .topbar, .layout { padding-left: 14px; padding-right: 14px; }
-  .statusbar { margin-left: 14px; margin-right: 14px; }
+  .statusbar, .updatebar { margin-left: 14px; margin-right: 14px; }
   .game-chip .chip-text { max-width: 150px; }
   .hero { height: 180px; }
   .hero-img { display: none; }

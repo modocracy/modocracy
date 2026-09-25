@@ -18,7 +18,7 @@ import webbrowser
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from . import APP_NAME, LEGACY_APP_NAME, __version__, gameinfo
+from . import APP_NAME, LEGACY_APP_NAME, __version__, gameinfo, updater
 from .core import Library, write_json
 from .server import AppServer
 
@@ -158,6 +158,7 @@ def run_app_window(webview, server: AppServer, url: str) -> bool:
 
     server.folder_picker = pick_folder
     server.on_focus = bring_to_front
+    server.on_exit = window.destroy  # 업데이트 후 새 버전으로 다시 켤 때 창을 닫는다
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     icon = icon_path()
@@ -166,7 +167,7 @@ def run_app_window(webview, server: AppServer, url: str) -> bool:
     except Exception:  # noqa: BLE001 - 창 부품 오류는 기록하고 아래에서 처리
         log.exception("전용 창 오류")
     if not shown.is_set():
-        server.folder_picker = server.on_focus = None
+        server.folder_picker = server.on_focus = server.on_exit = None
         server.shutdown()
         thread.join(5)
         return False
@@ -268,6 +269,7 @@ def main(argv: list[str] | None = None) -> int:
         show_existing(existing)
         return 0
 
+    updater.cleanup_leftovers()  # 지난 업데이트가 남긴 옛 exe 등
     webview = None if args.no_window or args.browser else load_webview()
     try:
         library = Library(data_dir)
