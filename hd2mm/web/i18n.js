@@ -176,7 +176,9 @@ const I18N = {
     "settings.saved": "설정을 저장했어요.",
     "disconnected.title": "모드 매니저가 종료되었어요",
     "disconnected.text": "이 창을 닫고 모드 매니저를 다시 실행해 주세요.",
-    "settings.language_later": "설정을 저장했어요. 진행 중인 작업이 끝나면 새 언어로 바뀌어요."
+    "settings.language_busy": "모드 추가·적용 같은 작업이 끝난 뒤에 언어를 바꿀 수 있어요.",
+    "language.switching": "언어를 바꾸는 중이에요",
+    "language.switching_note": "하던 작업을 마무리한 뒤 새 언어로 다시 열려요."
   },
   "en": {
     "app.title": "Modocracy · Helldivers 2 Mod Manager",
@@ -351,6 +353,8 @@ const I18N = {
     "settings.saved": "Settings saved.",
     "disconnected.title": "Modocracy has closed",
     "disconnected.text": "Close this window and start Modocracy again.",
-    "settings.language_later": "Settings saved. The new language will apply when the current task finishes."
+    "settings.language_busy": "You can change the language after the current task (adding or applying mods) finishes.",
+    "language.switching": "Switching language",
+    "language.switching_note": "The window will reopen in the new language once pending work is done."
   }
 };

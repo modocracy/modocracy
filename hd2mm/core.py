@@ -23,6 +23,7 @@ from .i18n import t
 
 PATCH_RE = re.compile(r"^([0-9a-f]{16})\.patch_(\d+)(\.gpu_resources|\.stream)?$", re.IGNORECASE)
 COMPANION_SUFFIXES = (".gpu_resources", ".stream")
+SETTINGS_FILE = "settings.json"
 ARCHIVE_EXTS = (".zip", ".7z", ".rar")
 JUNK_NAMES = {"__macosx", ".ds_store", "thumbs.db", "desktop.ini"}
 GUID_RE = re.compile(r"^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$", re.IGNORECASE)
@@ -612,7 +613,7 @@ class Library:
         self.mods_dir = data_dir / "mods"
         self.backups_dir = data_dir / "backups"
         self.tmp_dir = data_dir / "tmp"
-        self.settings_path = data_dir / "settings.json"
+        self.settings_path = data_dir / SETTINGS_FILE
         self.record_path = data_dir / "deployed.json"
         for directory in (self.mods_dir, self.backups_dir, self.tmp_dir):
             directory.mkdir(parents=True, exist_ok=True)
@@ -647,9 +648,19 @@ class Library:
     def game_path(self) -> str | None:
         return self.settings.get("gamePath")
 
+    def update_settings(self, changes: dict) -> None:
+        """설정 값을 바꾸고 저장한다. 저장에 실패하면 바꾸기 전으로 되돌린다 (화면과 파일이 어긋나지 않게)."""
+        before = dict(self.settings)
+        self.settings.update(changes)
+        try:
+            self.save()
+        except OSError:
+            self.settings.clear()
+            self.settings.update(before)
+            raise
+
     def set_game_path(self, path: str | None) -> None:
-        self.settings["gamePath"] = path
-        self.save()
+        self.update_settings({"gamePath": path})
 
     def _entry(self, mod_id: str) -> dict:
         for entry in self.settings["mods"]:

@@ -195,6 +195,16 @@ class EnglishServerTests(ServerCase):
         self.assertEqual(self.lib.settings["language"], "ko")
         self.assertEqual(i18n.current(), "ko")
 
+    def test_failed_settings_save_changes_nothing(self):
+        i18n.set_language("ko")
+        with mock.patch("hd2mm.core.write_json", side_effect=OSError("disk full")):
+            status, result = self.request("/api/settings", body={"language": "en", "checkUpdates": False})
+        self.assertEqual(status, 400)
+        self.assertIn("disk full", result["error"])
+        self.assertNotIn("language", self.lib.settings)  # 화면에 저장된 것처럼 보이지 않게 되돌린다
+        self.assertNotIn("checkUpdates", self.lib.settings)
+        self.assertEqual(i18n.current(), "ko")
+
     def test_i18n_script_is_served(self):
         with urllib.request.urlopen(self.base + "/i18n.js", timeout=5) as res:
             self.assertIn("javascript", res.headers["Content-Type"])

@@ -20,7 +20,7 @@ from pathlib import Path
 
 from . import APP_NAME, LEGACY_APP_NAME, __version__, gameinfo, i18n, updater
 from .i18n import t
-from .core import Library, read_json, write_json
+from .core import SETTINGS_FILE, Library, read_json, write_json
 from .server import AppServer
 
 PREFERRED_PORT = 47815
@@ -72,10 +72,10 @@ def migrate_legacy_data(data_dir: Path) -> bool:
     옮길 필요가 없거나 옮겼으면 True, 옛 폴더가 사용 중이라 옮기지 못했으면 False.
     """
     legacy = data_dir.parent / LEGACY_APP_NAME
-    if data_dir.exists() or not (legacy / "settings.json").is_file():
+    if data_dir.exists() or not (legacy / SETTINGS_FILE).is_file():
         return True
     try:
-        settings = json.loads((legacy / "settings.json").read_text(encoding="utf-8"))
+        settings = json.loads((legacy / SETTINGS_FILE).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return True
     if not isinstance(settings, dict) or "mods" not in settings or "gamePath" not in settings:
@@ -217,7 +217,7 @@ def create_server(library: Library, port: int, auto_exit: bool) -> AppServer:
 def saved_language(data_dir: Path) -> str | None:
     """설정 파일에서 언어만 읽는다. 보관함을 열기 전에 뜨는 오류 창도 사용자가 고른 언어로 띄우기 위해."""
     try:
-        value = read_json(data_dir / "settings.json").get("language")
+        value = read_json(data_dir / SETTINGS_FILE).get("language")
     except (OSError, ValueError, AttributeError):
         return None
     return value if isinstance(value, str) else None

@@ -122,10 +122,9 @@ async function refresh({ quiet = false } = {}) {
     if (!quiet) toast('err', e.message);
     return;
   }
-  // 언어가 바뀌었으면(설정 또는 다른 창에서) 새 언어로 다시 불러온다.
-  // 모드 추가 같은 작업 중이거나 대화상자가 열려 있으면 끝난 뒤의 새로고침 때 한다.
-  if (next.lang && next.lang !== LANG && !busy && !$('modalRoot').children.length) {
-    location.reload();
+  // 언어가 바뀌었으면(설정 또는 다른 창에서) 새 언어로 다시 연다. 그동안 옛 언어로 다시 그리지 않는다.
+  if (next.lang && next.lang !== LANG) {
+    switchLanguage();
     return;
   }
   const text = JSON.stringify(next);
@@ -572,15 +571,19 @@ async function importFiles(fileList) {
 
 // 앞서 누른 변경(켜기·옵션·순서)이 서버에 반영되고 화면이 새로고침될 때까지 기다린다.
 // 기다리는 동안 새 변경이 들어오면 그것까지 끝날 때까지 기다린다.
+async function waitForQueue() {
+  let pending;
+  do {
+    pending = mutationQueue;
+    await pending;
+  } while (pending !== mutationQueue);
+}
+
 async function settlePendingChanges() {
   busy = 'wait';
   renderStatus();
   try {
-    let pending;
-    do {
-      pending = mutationQueue;
-      await pending;
-    } while (pending !== mutationQueue);
+    await waitForQueue();
   } finally {
     busy = null;
     renderStatus();
@@ -763,6 +766,26 @@ async function installUpdate() {
   }
 }
 
+// ------------------------------------------------------------ 언어 전환
+// 화면 전체를 덮어 모든 버튼을 막고, 진행 중인 작업과 이미 누른 변경이 서버에 다 들어간 뒤 새 언어로 다시 연다.
+let switchingLanguage = false;
+
+function switchLanguage() {
+  if (switchingLanguage) return;
+  switchingLanguage = true;
+  const overlay = h('div', { class: 'disconnected' }, h('div', null,
+    h('strong', null, t('language.switching')),
+    h('span', { class: 'muted' }, t('language.switching_note'))));
+  for (const el of document.body.children) el.inert = true; // 키보드로도 누르지 못하게
+  document.body.append(overlay);
+  // 지금 실행 중인 요청(이 함수를 부른 새로고침 포함)이 끝난 뒤에 기다리기 시작한다
+  setTimeout(async () => {
+    while (busy) await new Promise((resolve) => setTimeout(resolve, 200));
+    await waitForQueue();
+    location.reload();
+  });
+}
+
 // ------------------------------------------------------------ 설정
 function openSettings() {
   // 저장할 때는 바꾼 값만 보낸다 (예: 게임 폴더가 사라진 상태에서도 언어는 바꿀 수 있게)
@@ -776,6 +799,7 @@ function openSettings() {
     placeholder: 'C:\\Program Files (x86)\\Steam\\steamapps\\common\\Helldivers 2',
   });
   const help = h('div', { class: 'help' }, t('settings.game_help'));
+  const languageHelp = h('div', { class: 'help err' });
   const setHelp = (cls, text) => { help.className = `help ${cls}`; help.textContent = text; };
   const browse = h('button', {
     class: 'btn', type: 'button',
@@ -812,7 +836,8 @@ function openSettings() {
         h('button', { class: 'btn small', type: 'button', onclick: () => openFolder('log') }, t('settings.view_log')))),
     h('div', { class: 'field' },
       h('label', { for: 'languageSelect' }, t('settings.language')),
-      h('div', { class: 'row' }, languageSelect)),
+      h('div', { class: 'row' }, languageSelect),
+      languageHelp),
     h('div', { class: 'field' },
       h('label', null, t('settings.updates')),
       h('label', { class: 'check-row' }, updateToggle, t('settings.check_on_start')),
@@ -833,20 +858,24 @@ function openSettings() {
           if (input.value !== initial.gamePath) changes.gamePath = input.value;
           if (updateToggle.checked !== initial.checkUpdates) changes.checkUpdates = updateToggle.checked;
           if (languageSelect.value !== initial.language) changes.language = languageSelect.value;
-          if (!Object.keys(changes).length) return true;
+          languageHelp.textContent = '';
+          if (!Object.keys(changes).length) {
+            // 바꾼 게 없어도 게임 폴더에 문제가 있으면 알려 준다 (그냥 닫히면 해결된 줄 알 수 있어서)
+            if (state?.game.problem) {
+              setHelp('err', state.game.problem);
+              return false;
+            }
+            return true;
+          }
+          // 모드 추가·적용 같은 작업 중에는 언어를 바꾸지 않는다 (바꾸면 화면을 다시 열어야 해서)
+          if (changes.language && busy) {
+            languageHelp.textContent = t('settings.language_busy');
+            return false;
+          }
           try {
             await queuedApi('/api/settings', { body: changes });
-            await refresh();
-            // 언어가 바뀌면 화면 전체를 새 언어로 다시 불러온다 (진행 중인 작업이 있으면 끝난 뒤에)
-            if (state?.lang && state.lang !== LANG) {
-              if (!busy) {
-                location.reload();
-                return true;
-              }
-              toast('ok', t('settings.language_later'));
-              return true;
-            }
-            toast('ok', t('settings.saved'));
+            await refresh(); // 언어가 바뀌었으면 여기서 전환이 시작된다
+            if (!switchingLanguage) toast('ok', t('settings.saved'));
             return true;
           } catch (e) {
             setHelp('err', e.message);

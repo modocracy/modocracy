@@ -352,8 +352,10 @@ class Handler(BaseHTTPRequestHandler):
             if "checkUpdates" in body:
                 changes["checkUpdates"] = bool(body["checkUpdates"])
             if changes:
-                lib.settings.update(changes)
-                lib.save()
+                try:
+                    lib.update_settings(changes)
+                except OSError as exc:
+                    raise ModError(t("err.settings_save_failed", detail=exc)) from None
             if "language" in changes:
                 i18n.set_language(i18n.resolve(changes["language"]))
             return {"ok": True}
