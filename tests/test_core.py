@@ -11,7 +11,10 @@ import zipfile
 from pathlib import Path
 from unittest import mock
 
-from hd2mm.core import Library, ModError, NeedsConfirm, PATCH_RE, analyze, clean_guid, parse_mod, safe_join
+from hd2mm.core import (
+    MAX_README_BYTES, PATCH_RE, Library, ModError, NeedsConfirm, analyze, build_plan, clean_guid,
+    legacy_plan_signature, parse_mod, read_readme, read_text, safe_join,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 LOADER_ZIP = ROOT / "Bingus-Shared-Loader-v17.zip"
@@ -62,7 +65,7 @@ class SampleModTests(TempCase):
         self.assertEqual(snap.info.extra["version"], "v17")
         self.assertIn("shared_loader_api", snap.info.extra["provides"])
         self.assertEqual([(s.archive, s.index) for s in snap.sets], [(ARCHIVE, 0)])
-        self.assertIn("Bingus Shared Loader", snap.info.readme)
+        self.assertIn("Bingus Shared Loader", read_readme(snap.info))
 
     def test_reimport_same_guid_updates_in_place(self):
         self.import_samples()
@@ -219,7 +222,7 @@ class SyntheticModTests(TempCase):
         result = self.lib.import_archive(archive, "My Cool Mod v2.zip")
         self.assertEqual(result["name"], "My Cool Mod v2")
         snap = self.lib.snapshot()[0]
-        self.assertEqual(snap.info.readme, "hello")
+        self.assertEqual(read_readme(snap.info), "hello")
         self.lib.deploy(self.game)
         self.assertEqual((self.game / "data" / "4444444444444444.patch_0.gpu_resources").read_text(), "g")
         self.assertEqual((self.game / "data" / "4444444444444444.patch_0.stream").read_bytes(), b"")
@@ -345,7 +348,7 @@ class ReviewRegressionTests(TempCase):
             with self.assertRaises(ModError):
                 self.lib.deploy(self.game)
         self.assertEqual(self.game_files(), [])
-        self.assertEqual(self.lib._load_record(self.game)["files"], [])
+        self.assertIsNone(self.lib._load_record(self.game))  # 파일이 없는 기록은 남기지 않음
         self.lib.deploy(self.game)
         self.assertEqual(self.lib.status(self.game, self.lib.snapshot())["state"], "ok")
 
@@ -428,6 +431,55 @@ class SecondReviewTests(TempCase):
             (self.lib.mods_dir / mod_id / "manifest.json").write_text('{"Name": "Renamed"}', encoding="utf-8")
             self.assertEqual(self.lib.snapshot()[0].info.name, "Renamed")
             self.assertEqual(parse.call_count, 1)
+
+    def test_cache_notices_new_patch_folder_inside_subfolder(self):
+        archive = make_zip(self.tmp / "pack.zip", {
+            "Pack/Red/1111111111111111.patch_0": "r",
+            "Pack/Blue/1111111111111111.patch_0": "b",
+        })
+        mod_id = self.lib.import_archive(archive, archive.name)["id"]
+        self.assertEqual(len(self.lib.snapshot()[0].info.options), 2)
+        extra = self.lib.mods_dir / mod_id / "Red" / "Extra"
+        extra.mkdir()
+        (extra / "2222222222222222.patch_0").write_text("x")
+        self.assertEqual(len(self.lib.snapshot()[0].info.options), 3)
+
+    def test_cache_notices_edited_extra_manifest(self):
+        archive = make_zip(self.tmp / "mod.zip", {
+            "Mod-manifest.json": json.dumps({"name": "Mod", "display_version": "v1"}),
+            f"{ARCHIVE}.patch_0": "p",
+        })
+        mod_id = self.lib.import_archive(archive, archive.name)["id"]
+        self.assertEqual(self.lib.snapshot()[0].info.extra["version"], "v1")
+        extra = self.lib.mods_dir / mod_id / "Mod-manifest.json"
+        extra.write_text(json.dumps({"name": "Mod", "display_version": "v2"}), encoding="utf-8")
+        stat = extra.stat()
+        os.utime(extra, ns=(stat.st_atime_ns, stat.st_mtime_ns + 5_000_000_000))
+        self.assertEqual(self.lib.snapshot()[0].info.extra["version"], "v2")
+
+    def test_readme_reads_only_the_limit_and_keeps_korean_intact(self):
+        path = self.tmp / "readme.txt"
+        path.write_bytes(("가" * 10).encode("utf-8"))  # 한 글자 3바이트
+        self.assertEqual(read_text(path, 7), "가가")      # 7바이트에서 잘린 세 번째 글자는 버림
+        big = self.tmp / "big.txt"
+        big.write_bytes(b"a" * (MAX_README_BYTES * 5))
+        self.assertEqual(len(read_text(big, MAX_README_BYTES)), MAX_README_BYTES)
+
+    def test_v1_signature_is_accepted_and_upgraded(self):
+        self.import_patch()
+        self.lib.deploy(self.game)
+        record = self.lib._load_record(self.game)
+        plan = build_plan(self.lib.snapshot())
+        record["signature"] = legacy_plan_signature(plan)  # v1.0.0이 남긴 기록
+        self.lib._write_record(self.game, record)
+        self.assertEqual(self.lib.status(self.game, self.lib.snapshot())["state"], "ok")
+        self.assertNotEqual(self.lib._load_record(self.game)["signature"], legacy_plan_signature(plan))
+
+    def test_empty_records_are_not_kept(self):
+        self.import_patch()
+        self.lib.deploy(self.game)
+        self.lib.purge(self.game)
+        self.assertEqual(self.lib.load_records(), {})
 
     def test_locked_old_mod_folder_gives_clear_error(self):
         archive = make_zip(self.tmp / "mod.zip", {

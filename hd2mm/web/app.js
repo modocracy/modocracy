@@ -418,10 +418,10 @@ function fold(key, ...children) {
 }
 
 // README 본문은 목록 새로고침마다 보내지 않고, 펼칠 때 한 번 가져와 기억해 둔다.
-const readmeCache = new Map(); // `${id}|${바뀐 시각}` → Promise<string>
+const readmeCache = new Map(); // `${id}|${README 파일 수정 시각}` → Promise<string>
 
 function loadReadme(m) {
-  const key = `${m.id}|${m.updatedAt || m.addedAt || ''}`;
+  const key = `${m.id}|${m.readmeRev}`;
   if (!readmeCache.has(key)) {
     readmeCache.set(key, api(`/api/mods/${enc(m.id)}/readme`).then(
       (r) => r.readme || '',
@@ -521,7 +521,11 @@ async function importFiles(fileList) {
   const accepted = files.filter((f) => /\.(zip|7z|rar)$/i.test(f.name));
   const rejected = files.filter((f) => !accepted.includes(f));
   if (rejected.length) toast('warn', `압축 파일(.zip, .7z, .rar)만 추가할 수 있어요: ${rejected.map((f) => f.name).join(', ')}`);
-  if (!accepted.length || busy) return;
+  if (!accepted.length) return;
+  if (busy) {
+    toast('warn', '지금은 다른 작업을 하고 있어요. 끝난 뒤 다시 추가해 주세요.');
+    return;
+  }
   busy = 'import';
   render();
   const progress = toast('loading', '', { sticky: true });
@@ -546,12 +550,19 @@ async function importFiles(fileList) {
 }
 
 // 앞서 누른 변경(켜기·옵션·순서)이 서버에 반영되고 화면이 새로고침될 때까지 기다린다.
+// 기다리는 동안 새 변경이 들어오면 그것까지 끝날 때까지 기다린다.
 async function settlePendingChanges() {
   busy = 'wait';
+  renderStatus();
   try {
-    await mutationQueue;
+    let pending;
+    do {
+      pending = mutationQueue;
+      await pending;
+    } while (pending !== mutationQueue);
   } finally {
     busy = null;
+    renderStatus();
   }
 }
 

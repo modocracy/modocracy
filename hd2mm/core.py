@@ -87,12 +87,22 @@ def scan_game_patch_names(data_dir: Path) -> list[str]:
 # ---------------------------------------------------------------- 파일 도우미
 
 def read_text(path: Path, limit: int | None = None) -> str:
-    data = path.read_bytes()[:limit] if limit else path.read_bytes()
+    """텍스트 파일을 읽는다. limit이 있으면 앞부분 limit 바이트만 실제로 읽는다."""
+    if limit:
+        with open(path, "rb") as fh:
+            data = fh.read(limit + 1)
+        truncated = len(data) > limit
+        data = data[:limit]
+    else:
+        data, truncated = path.read_bytes(), False
+    # 잘린 끝에 걸친 글자(최대 3바이트)는 버리고 해석한다
+    cuts = range(4) if truncated else range(1)
     for encoding in ("utf-8-sig", "cp949"):
-        try:
-            return data.decode(encoding)
-        except UnicodeDecodeError:
-            continue
+        for cut in cuts:
+            try:
+                return data[: len(data) - cut].decode(encoding)
+            except UnicodeDecodeError:
+                continue
     return data.decode("latin-1")
 
 
@@ -184,7 +194,7 @@ class ModInfo:
     mode: str = "fixed"         # 'fixed'(선택 없음) | 'multi'(옵션 켜기/끄기) | 'single'(하나 고르기)
     base: list[str] = field(default_factory=list)   # 항상 적용되는 폴더
     options: list[ModOption] = field(default_factory=list)
-    readme: str | None = None
+    readme_file: str | None = None  # README 파일 이름 (본문은 필요할 때 read_readme로 읽는다)
     extra: dict | None = None   # "<이름>-manifest.json" 확장 정보(버전·필요 모드)
 
     def all_dirs(self) -> list[str]:
@@ -220,7 +230,7 @@ def _parse_option(root: Path, raw: dict, fallback: str) -> ModOption:
     return opt
 
 
-def _read_readme(root: Path) -> str | None:
+def _find_readme(root: Path) -> str | None:
     try:
         files = sorted(
             (e for e in root.iterdir() if e.is_file() and e.suffix.lower() in (".txt", ".md")),
@@ -230,11 +240,17 @@ def _read_readme(root: Path) -> str | None:
         return None
     for entry in files:
         if "readme" in entry.name.lower() or "read_me" in entry.name.lower() or "설명" in entry.name:
-            try:
-                return read_text(entry, MAX_README_BYTES).strip() or None
-            except OSError:
-                return None
+            return entry.name
     return None
+
+
+def read_readme(info: ModInfo) -> str | None:
+    if not info.readme_file:
+        return None
+    try:
+        return read_text(info.root / info.readme_file, MAX_README_BYTES).strip() or None
+    except OSError:
+        return None
 
 
 def _read_extra_manifest(root: Path) -> dict | None:
@@ -269,7 +285,7 @@ def _read_extra_manifest(root: Path) -> dict | None:
 def parse_mod(root: Path, fallback_name: str | None = None) -> ModInfo:
     manifest_path = _find_child(root, "manifest.json")
     info = ModInfo(root=root, guid=None, name=fallback_name or root.name)
-    info.readme = _read_readme(root)
+    info.readme_file = _find_readme(root)
     info.extra = _read_extra_manifest(root)
     if manifest_path:
         try:
@@ -477,8 +493,7 @@ def build_plan(snapshot: list[ModSnapshot]) -> list[PlanItem]:
     return plan
 
 
-def plan_signature(plan: list[PlanItem]) -> str:
-    """적용 내용의 지문. 보관 폴더를 옮겨도 바뀌지 않도록 모드 ID와 상대 경로만 쓴다."""
+def _signature(plan: list[PlanItem], describe) -> str:
     digest = hashlib.sha256()
     for item in plan:
         for suffix, src in item.patch.sources():
@@ -487,12 +502,26 @@ def plan_signature(plan: list[PlanItem]) -> str:
             except OSError:
                 stat = None
             size, mtime = (stat.st_size, stat.st_mtime_ns) if stat else (0, 0)
-            try:
-                rel = src.relative_to(item.root).as_posix() if src else ""
-            except ValueError:
-                rel = src.name
-            digest.update(f"{item.target}{suffix}|{item.mod_id}/{rel}|{size}|{mtime}\n".encode("utf-8"))
+            digest.update(f"{item.target}{suffix}|{describe(item, src)}|{size}|{mtime}\n".encode("utf-8"))
     return digest.hexdigest()
+
+
+def _relative_source(item: PlanItem, src: Path | None) -> str:
+    try:
+        rel = src.relative_to(item.root).as_posix() if src else ""
+    except ValueError:
+        rel = src.name
+    return f"{item.mod_id}/{rel}"
+
+
+def plan_signature(plan: list[PlanItem]) -> str:
+    """적용 내용의 지문. 보관 폴더를 옮겨도 바뀌지 않도록 모드 ID와 상대 경로만 쓴다."""
+    return _signature(plan, _relative_source)
+
+
+def legacy_plan_signature(plan: list[PlanItem]) -> str:
+    """v1.0.0의 지문(절대 경로 사용). 그 버전으로 적용한 기록을 알아보는 데만 쓴다."""
+    return _signature(plan, lambda item, src: str(src))
 
 
 def _sha256(path: Path) -> str:
@@ -503,11 +532,26 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _mtime_ns(path: Path) -> int | None:
+def mtime_ns(path: Path) -> int | None:
     try:
         return path.stat().st_mtime_ns
     except OSError:
         return None
+
+
+def _tree_stamp(root: Path) -> tuple:
+    """모드 폴더가 바뀌었는지 가려내는 값.
+
+    하위 폴더까지 모든 폴더의 수정 시각(안에 파일·폴더가 생기거나 없어지면 바뀜)과
+    최상위 .json 파일(manifest, "<이름>-manifest.json")의 수정 시각을 모은다.
+    """
+    stamp = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames.sort()
+        stamp.append((dirpath, mtime_ns(Path(dirpath))))
+        if dirpath == str(root):
+            stamp += [(name, mtime_ns(root / name)) for name in sorted(filenames) if name.lower().endswith(".json")]
+    return tuple(stamp)
 
 
 def _record_key(game_path) -> str:
@@ -574,9 +618,9 @@ class Library:
     # ---- 모드 정보
 
     def info(self, entry: dict) -> ModInfo:
-        """모드 정보를 읽는다. 모드 폴더와 manifest가 그대로면 전에 읽은 결과를 다시 쓴다."""
+        """모드 정보를 읽는다. 모드 폴더 구조와 설정 파일이 그대로면 전에 읽은 결과를 다시 쓴다."""
         root = self.mods_dir / entry["id"]
-        stamp = (_mtime_ns(root), _mtime_ns(root / "manifest.json"), entry.get("fallbackName"))
+        stamp = (_tree_stamp(root), entry.get("fallbackName"))
         cached = self._info_cache.get(entry["id"])
         if cached and cached[0] == stamp:
             return cached[1]
@@ -585,7 +629,7 @@ class Library:
         return info
 
     def readme(self, mod_id: str) -> str | None:
-        return self.info(self._entry(mod_id)).readme
+        return read_readme(self.info(self._entry(mod_id)))
 
     def snapshot(self) -> list[ModSnapshot]:
         result = []
@@ -706,7 +750,7 @@ class Library:
 
     # ---- 게임 폴더 상태
 
-    def _load_records(self) -> dict[str, dict]:
+    def load_records(self) -> dict[str, dict]:
         """게임 폴더별 적용 기록. 폴더를 바꿔도 이전 폴더에 설치한 파일을 놓치지 않도록 따로 보관한다."""
         if not self.record_path.exists():
             return {}
@@ -723,11 +767,13 @@ class Library:
         return {}
 
     def _load_record(self, game_path: Path) -> dict | None:
-        return self._load_records().get(_record_key(game_path))
+        return self.load_records().get(_record_key(game_path))
 
     def _write_record(self, game_path: Path, record: dict) -> None:
-        records = self._load_records()
+        records = self.load_records()
         records[_record_key(game_path)] = record
+        # 설치한 파일이 하나도 없는 기록(모두 제거한 폴더, 잘못 입력했던 경로 등)은 남기지 않는다
+        records = {key: value for key, value in records.items() if value.get("files")}
         write_json(self.record_path, {"version": 2, "records": records})
 
     def _save_record(self, game_path: Path, files: list[dict], signature: str | None, mods: list[dict]) -> None:
@@ -739,11 +785,11 @@ class Library:
             "mods": mods,
         })
 
-    def other_deployments(self, game_path: Path | None) -> list[dict]:
+    def other_deployments(self, game_path: Path | None, records: dict | None = None) -> list[dict]:
         """지금 설정된 곳이 아닌 게임 폴더에 이 매니저가 설치해 두고 아직 남아 있는 파일 수."""
         current = _record_key(game_path) if game_path else None
         result = []
-        for key, record in self._load_records().items():
+        for key, record in (self.load_records() if records is None else records).items():
             if key == current:
                 continue
             data_dir = Path(record["gamePath"]) / "data"
@@ -755,10 +801,22 @@ class Library:
                 result.append({"gamePath": record["gamePath"], "files": len(left)})
         return result
 
-    def status(self, game_path: Path, snapshot: list[ModSnapshot]) -> dict:
+    def _signature_matches(self, game_path: Path, record: dict, plan: list[PlanItem]) -> bool:
+        saved = record.get("signature")
+        current = plan_signature(plan)
+        if saved == current:
+            return True
+        if saved and saved == legacy_plan_signature(plan):
+            # v1.0.0에서 적용한 기록: 적용 내용은 같으니 새 형식 지문으로 바꿔 둔다
+            self._write_record(game_path, {**record, "signature": current})
+            return True
+        return False
+
+    def status(self, game_path: Path, snapshot: list[ModSnapshot], records: dict | None = None) -> dict:
         data_dir = game_path / "data"
         plan = build_plan(snapshot)
-        record = self._load_record(game_path) or {}
+        records = self.load_records() if records is None else records
+        record = records.get(_record_key(game_path)) or {}
         recorded = {f["name"].lower(): f for f in record.get("files") or [] if isinstance(f, dict) and "name" in f}
         present = scan_game_patch_names(data_dir)
         managed = {name for name, info in recorded.items() if self._matches_record(data_dir / info["name"], info)}
@@ -767,7 +825,7 @@ class Library:
         if recorded:
             if missing:
                 state = "broken"
-            elif record.get("signature") != plan_signature(plan):
+            elif not self._signature_matches(game_path, record, plan):
                 state = "dirty"
             else:
                 state = "ok"

@@ -14,7 +14,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
 from . import __version__, gameinfo
-from .core import Library, ModError, NeedsConfirm, analyze, safe_join
+from .core import Library, ModError, NeedsConfirm, analyze, mtime_ns, safe_join
 
 log = logging.getLogger(__name__)
 
@@ -381,8 +381,9 @@ def build_state(lib: Library) -> dict:
     version = gameinfo.exe_version(game) if game and not problem else None
     snapshot = lib.snapshot()
     issues = analyze(snapshot, version)
-    status = lib.status(game, snapshot) if game and not problem else {"state": "nogame", "unmanaged": []}
-    status["otherDeployments"] = lib.other_deployments(game if game and not problem else None)
+    records = lib.load_records()  # 설치 기록은 한 번만 읽어서 함께 쓴다
+    status = lib.status(game, snapshot, records) if game and not problem else {"state": "nogame", "unmanaged": []}
+    status["otherDeployments"] = lib.other_deployments(game if game and not problem else None, records)
     targets = status.pop("planTargets", {})
     mods = []
     for snap in snapshot:
@@ -432,7 +433,9 @@ def build_state(lib: Library) -> dict:
                     }
                     for ps in snap.sets
                 ],
-                "hasReadme": bool(info.readme),  # 본문은 펼칠 때 /api/mods/<id>/readme 로 가져온다
+                # README 본문은 펼칠 때 /api/mods/<id>/readme 로 가져온다. readmeRev가 바뀌면 다시 받는다.
+                "hasReadme": info.readme_file is not None,
+                "readmeRev": _revision(root / info.readme_file) if info.readme_file else None,
             })
         else:
             mod["name"] = entry.get("fallbackName") or entry.get("sourceName") or snap.id
@@ -450,6 +453,12 @@ def build_state(lib: Library) -> dict:
         "paths": {"library": str(lib.data_dir), "backups": str(lib.backups_dir)},
         "sevenZip": gameinfo.find_7zip() is not None,
     }
+
+
+def _revision(path: Path) -> str | None:
+    """파일 수정 시각(ns)을 문자열로. 숫자로 보내면 브라우저에서 정밀도가 깎인다."""
+    value = mtime_ns(path)
+    return str(value) if value is not None else None
 
 
 def _size(path: Path) -> int:

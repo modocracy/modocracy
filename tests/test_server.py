@@ -117,6 +117,30 @@ class ServerTests(unittest.TestCase):
         status, _ = self.request("/api/mods/unknown/readme")
         self.assertEqual(status, 400)
 
+    def test_readme_revision_changes_on_update(self):
+        def upload(text):
+            archive = make_zip(self.tmp / "mod.zip", {
+                "manifest.json": json.dumps({"Guid": "11111111-2222-3333-4444-555555555555", "Name": "M"}),
+                "readme.txt": text, f"{ARCHIVE}.patch_0": "p",
+            })
+            status, result = self.request("/api/import?name=mod.zip", data=archive.read_bytes())
+            self.assertEqual(status, 200, result)
+            _, state = self.request("/api/state")
+            return state["mods"][0]["readmeRev"]
+
+        first = upload("첫 번째")
+        second = upload("두 번째")
+        self.assertIsNotNone(first)
+        self.assertNotEqual(first, second)
+        _, body = self.request("/api/mods/11111111-2222-3333-4444-555555555555/readme")
+        self.assertEqual(body["readme"], "두 번째")
+
+    def test_state_reads_deploy_records_once(self):
+        with mock.patch.object(self.lib, "load_records", wraps=self.lib.load_records) as load:
+            status, _ = self.request("/api/state")
+        self.assertEqual(status, 200)
+        self.assertEqual(load.call_count, 1)
+
     def test_folder_dialog_does_not_block_other_requests(self):
         opened, release = threading.Event(), threading.Event()
 
