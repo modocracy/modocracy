@@ -50,8 +50,17 @@ class AppServer(ThreadingHTTPServer):
         self.ever_connected = False
         self.last_change = time.monotonic()
         self.client_lock = threading.Lock()
+        # 전용 앱 창으로 실행할 때 app.py가 채운다: 창에 딸린 폴더 선택 창, 창을 앞으로 가져오기
+        self.folder_picker = None
+        self.on_focus = None
         if auto_exit:
-            threading.Thread(target=self._watch_clients, daemon=True).start()
+            self.start_auto_exit()
+
+    def start_auto_exit(self) -> None:
+        """Edge 앱 창·브라우저로 열었을 때: 창이 모두 닫히면(연결이 끊기면) 스스로 끝난다."""
+        with self.client_lock:
+            self.last_change = time.monotonic()
+        threading.Thread(target=self._watch_clients, daemon=True).start()
 
     @property
     def port(self) -> int:
@@ -90,6 +99,19 @@ class AppServer(ThreadingHTTPServer):
         with self.client_lock:
             self.active_operations -= 1
             self.last_change = time.monotonic()
+
+    def finish_operations(self, timeout: float) -> bool:
+        """새 작업은 받지 않고, 진행 중인 작업(적용 등)이 끝날 때까지 기다린다. 끝났으면 True."""
+        deadline = time.monotonic() + timeout
+        with self.client_lock:
+            self.stopping = True
+        while True:
+            with self.client_lock:
+                if self.active_operations == 0:
+                    return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.1)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -147,6 +169,12 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send_json(build_state(self.server.library))
             if path == "/api/events":
                 return self._events()
+            if path == "/api/focus":
+                # 두 번째로 실행했을 때 이미 열린 창을 앞으로 가져온다 (창을 보여 주는 것 말고는 하는 일이 없다)
+                focus = self.server.on_focus
+                if focus:
+                    focus()
+                return self._send_json({"focused": focus is not None})
             parts = path.strip("/").split("/")
             if len(parts) == 4 and parts[:2] == ["api", "mods"] and parts[3] == "file":
                 return self._mod_file(unquote(parts[2]), query.get("path", [""])[0])
@@ -337,6 +365,10 @@ def _pick_folder(server: AppServer, initial: str | None) -> str | None:
     if not server.dialog_lock.acquire(blocking=False):
         raise ModError("폴더 선택 창이 이미 열려 있어요.")
     try:
+        start = initial if initial and Path(initial).is_dir() else None
+        if server.folder_picker:  # 전용 앱 창: 창에 딸린 Windows 폴더 선택 창
+            chosen = server.folder_picker(start)
+            return str(Path(chosen)) if chosen else None
         import tkinter as tk
         from tkinter import filedialog
 
@@ -345,8 +377,7 @@ def _pick_folder(server: AppServer, initial: str | None) -> str | None:
         root.attributes("-topmost", True)
         try:
             chosen = filedialog.askdirectory(
-                parent=root, title="Helldivers 2 설치 폴더 선택", mustexist=True,
-                initialdir=initial if initial and Path(initial).is_dir() else None,
+                parent=root, title="Helldivers 2 설치 폴더 선택", mustexist=True, initialdir=start,
             )
         finally:
             root.destroy()

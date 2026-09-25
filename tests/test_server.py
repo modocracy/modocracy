@@ -359,6 +359,121 @@ class LifecycleTests(unittest.TestCase):
         self.assertFalse(thread.is_alive(), "창이 닫히면 스스로 종료해야 함")
 
 
+class FakeEvent:
+    def __init__(self):
+        self.handlers = []
+
+    def __iadd__(self, handler):
+        self.handlers.append(handler)
+        return self
+
+    def fire(self):
+        for handler in self.handlers:
+            handler()
+
+
+class FakeWebview:
+    """pywebview 대신 쓰는 가짜. start()가 창이 떠 있는 동안을 흉내 낸다."""
+
+    class FileDialog:
+        FOLDER = 20
+
+    def __init__(self, show=True, fail=False, while_open=None):
+        self.show, self.fail, self.while_open = show, fail, while_open
+        self.window = None
+
+    def create_window(self, title, url, **kwargs):
+        events = {name: FakeEvent() for name in ("shown", "minimized", "restored", "maximized")}
+        self.window = mock.Mock(events=mock.Mock(**events), title=title, url=url, kwargs=kwargs)
+        self.window.create_file_dialog.return_value = ("D:\\Games\\Helldivers 2",)
+        return self.window
+
+    def start(self, **kwargs):
+        if self.fail:
+            raise RuntimeError("WebView2 초기화 실패")
+        if self.show:
+            self.window.events.shown.fire()
+        if self.while_open:
+            self.while_open()
+
+
+class AppWindowTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="hd2mm-win-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.server = AppServer(("127.0.0.1", 0), Library(self.tmp / "data"), web_dir(), auto_exit=False)
+        self.addCleanup(self.server.server_close)
+        self.base = f"http://127.0.0.1:{self.server.port}/"
+
+    def get(self, path):
+        with urllib.request.urlopen(self.base + path, timeout=5) as res:
+            return json.loads(res.read())
+
+    def test_window_runs_until_closed_and_uses_window_dialogs(self):
+        seen = {}
+
+        def while_open():
+            seen["ping"] = self.get("api/ping")["app"]
+            seen["focus"] = self.get("api/focus")
+            seen["folder"] = self.server.folder_picker("C:\\")
+
+        fake = FakeWebview(while_open=while_open)
+        self.assertTrue(app.run_app_window(fake, self.server, self.base))
+        self.assertEqual(seen["ping"], "hd2mm")
+        self.assertEqual(seen["focus"], {"focused": True})
+        self.assertEqual(seen["folder"], "D:\\Games\\Helldivers 2")
+        fake.window.show.assert_called()
+        self.assertEqual(fake.window.title, "Modocracy")
+        self.assertTrue(fake.window.kwargs["text_select"])
+        self.assertTrue(self.server.stopping)  # 창을 닫은 뒤에는 새 작업을 받지 않는다
+
+    def test_window_that_never_opens_leaves_server_reusable(self):
+        self.assertFalse(app.run_app_window(FakeWebview(fail=True), self.server, self.base))
+        self.assertFalse(self.server.stopping)
+        self.assertIsNone(self.server.on_focus)
+        thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            self.assertEqual(self.get("api/focus"), {"focused": False})
+        finally:
+            self.server.shutdown()
+            thread.join(5)
+
+    def test_closing_window_waits_for_running_operation(self):
+        self.assertTrue(self.server.begin_operation())
+        threading.Timer(0.5, self.server.end_operation).start()
+        started = time.monotonic()
+        self.assertTrue(self.server.finish_operations(timeout=5))
+        self.assertGreaterEqual(time.monotonic() - started, 0.4)
+        self.assertFalse(self.server.begin_operation())  # 끝내는 중에는 새 작업 거절
+        self.assertTrue(self.server.stopping)
+
+    def test_finish_operations_times_out(self):
+        self.assertTrue(self.server.begin_operation())
+        self.assertFalse(self.server.finish_operations(timeout=0.3))
+
+    def test_second_launch_brings_existing_window_forward(self):
+        focused = []
+        self.server.on_focus = lambda: focused.append(True)
+        thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with mock.patch.object(app, "open_window") as window:
+                app.show_existing(self.base)
+                window.assert_not_called()
+                self.assertEqual(focused, [True])
+                self.server.on_focus = None  # Edge 창 모드로 떠 있는 매니저면 창을 하나 더 연다
+                app.show_existing(self.base)
+                window.assert_called_once_with(self.base + "?app=1")
+        finally:
+            self.server.shutdown()
+            thread.join(5)
+
+    def test_no_webview_without_webview2(self):
+        with mock.patch.object(gameinfo, "has_webview2", return_value=False):
+            self.assertIsNone(app.load_webview())
+
+
 class LegacyDataTests(unittest.TestCase):
     def setUp(self):
         self.base = Path(tempfile.mkdtemp(prefix="hd2mm-legacy-"))

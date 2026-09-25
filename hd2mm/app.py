@@ -1,4 +1,7 @@
-"""프로그램 시작점: 서버를 띄우고 Edge 앱 창(없으면 기본 브라우저)으로 화면을 연다."""
+"""프로그램 시작점: 서버를 띄우고 Modocracy 전용 창을 연다.
+
+전용 창은 Windows의 WebView2 부품으로 화면을 그린다. 쓸 수 없으면 Edge 앱 창(없으면 기본 브라우저)으로 연다.
+"""
 from __future__ import annotations
 
 import argparse
@@ -8,6 +11,7 @@ import logging
 import os
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 import webbrowser
@@ -106,6 +110,85 @@ def open_window(url: str) -> None:
     webbrowser.open(url)
 
 
+def icon_path() -> Path | None:
+    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
+    path = base / "assets" / "icon.ico"
+    return path if path.is_file() else None
+
+
+def load_webview():
+    """전용 창을 만드는 pywebview. 쓸 수 없으면 None (그때는 Edge 앱 창이나 기본 브라우저로 연다)."""
+    if not gameinfo.has_webview2():
+        log.info("WebView2가 없어 Edge 앱 창으로 엽니다.")
+        return None
+    try:
+        import webview
+    except Exception:  # noqa: BLE001 - 설치 안 됨, .NET 초기화 실패 등
+        log.exception("전용 창을 쓸 수 없어 Edge 앱 창으로 엽니다.")
+        return None
+    return webview
+
+
+def run_app_window(webview, server: AppServer, url: str) -> bool:
+    """전용 창을 띄우고 닫힐 때까지 기다린다 (서버는 뒤에서 돈다).
+
+    창이 한 번도 뜨지 못했으면 False를 돌려준다. 이때 서버는 멈추기만 하고 다시 쓸 수 있다.
+    """
+    window = webview.create_window(
+        APP_NAME, url, width=1280, height=840, min_size=(760, 560),
+        background_color="#0B0D10", text_select=True,
+    )
+    shown = threading.Event()
+    minimized = threading.Event()
+    window.events.shown += lambda *_: shown.set()
+    window.events.minimized += lambda *_: minimized.set()
+    window.events.restored += lambda *_: minimized.clear()
+    window.events.maximized += lambda *_: minimized.clear()
+
+    def pick_folder(initial: str | None) -> str | None:
+        chosen = window.create_file_dialog(webview.FileDialog.FOLDER, directory=initial or "")
+        return chosen[0] if chosen else None
+
+    def bring_to_front() -> None:
+        if minimized.is_set():
+            window.restore()
+        window.show()
+        window.on_top = True  # 다른 창 뒤에 가려져 있으면 앞으로 올린다
+        window.on_top = False
+
+    server.folder_picker = pick_folder
+    server.on_focus = bring_to_front
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    icon = icon_path()
+    try:
+        webview.start(gui="edgechromium", icon=str(icon) if icon else None)
+    except Exception:  # noqa: BLE001 - 창 부품 오류는 기록하고 아래에서 처리
+        log.exception("전용 창 오류")
+    if not shown.is_set():
+        server.folder_picker = server.on_focus = None
+        server.shutdown()
+        thread.join(5)
+        return False
+    # 적용하는 중에 창을 닫았으면 그 작업이 끝날 때까지 기다린 뒤 끝낸다
+    if not server.finish_operations(timeout=300):
+        log.warning("진행 중인 작업을 기다리다 시간이 지나 종료합니다.")
+    server.shutdown()
+    thread.join(5)
+    return True
+
+
+def show_existing(url: str) -> None:
+    """이미 실행 중인 매니저의 창을 앞으로 가져온다. 전용 창이 아니면(Edge 창 모드) 창을 하나 더 연다."""
+    try:
+        with urllib.request.urlopen(url + "api/focus", timeout=3) as res:
+            if json.loads(res.read().decode("utf-8")).get("focused"):
+                return
+    except (OSError, ValueError):
+        pass
+    open_window(url + "?app=1")
+
+
 def running_instance(data_dir: Path) -> str | None:
     """이미 실행 중인 매니저가 있으면 그 주소를 돌려준다."""
     try:
@@ -143,6 +226,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--data-dir", help=f"모드 보관 폴더 (기본: %%LOCALAPPDATA%%\\{APP_NAME})")
     parser.add_argument("--port", type=int, default=PREFERRED_PORT)
     parser.add_argument("--no-window", action="store_true", help="창을 열지 않고 서버만 실행 (개발용)")
+    parser.add_argument("--browser", action="store_true", help="전용 창 대신 Edge 앱 창(또는 기본 브라우저)으로 열기")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args(argv)
 
@@ -161,7 +245,7 @@ def main(argv: list[str] | None = None) -> int:
         while time.monotonic() < deadline:
             existing = running_instance(data_dir)
             if existing:
-                open_window(existing + "?app=1")
+                show_existing(existing)
                 return 0
             time.sleep(0.2)
         show_error("실행 중인 모드 매니저가 응답하지 않아요. 잠시 후 다시 실행해 주세요.")
@@ -181,14 +265,16 @@ def main(argv: list[str] | None = None) -> int:
         if args.no_window:
             log.error("같은 보관함의 모드 매니저가 이미 실행 중이에요.")
             return 1
-        open_window(existing + "?app=1")
+        show_existing(existing)
         return 0
 
+    webview = None if args.no_window or args.browser else load_webview()
     try:
         library = Library(data_dir)
         if not library.game_path:
             library.set_game_path(gameinfo.detect_game_path())
-        server = create_server(library, args.port, auto_exit=not args.no_window)
+        # 전용 창이면 창이 닫힐 때 끝나므로, 연결이 끊기면 스스로 끝나는 기능은 Edge 창 모드에서만 쓴다
+        server = create_server(library, args.port, auto_exit=not args.no_window and webview is None)
     except Exception as exc:  # noqa: BLE001 - 창 없이 실행되므로 메시지 상자로 알림
         log.exception("시작 실패")
         show_error(f"모드 매니저를 시작하지 못했어요.\n\n{exc}")
@@ -198,9 +284,14 @@ def main(argv: list[str] | None = None) -> int:
     instance_file = data_dir / "instance.json"
     write_json(instance_file, {"port": server.port, "pid": os.getpid()})
     log.info("%s %s 시작: %s (보관 폴더 %s)", APP_NAME, __version__, url, data_dir)
-    if not args.no_window:
-        open_window(url + "?app=1")
     try:
+        if webview is not None:
+            if run_app_window(webview, server, url):
+                return 0
+            log.warning("전용 창을 열지 못해 Edge 앱 창으로 엽니다.")
+            server.start_auto_exit()
+        if not args.no_window:
+            open_window(url + "?app=1")
         server.serve_forever()
     except KeyboardInterrupt:
         pass

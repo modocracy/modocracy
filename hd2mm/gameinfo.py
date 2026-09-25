@@ -163,6 +163,31 @@ def find_7zip() -> str | None:
     return None
 
 
+WEBVIEW2_RUNTIME_KEY = "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+
+
+def has_webview2() -> bool:
+    """전용 앱 창을 그리는 Microsoft Edge WebView2 런타임이 설치돼 있는지 (Windows 11에는 기본 포함)."""
+    if sys.platform != "win32":
+        return False
+    import winreg
+
+    keys = [
+        (winreg.HKEY_LOCAL_MACHINE, rf"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{WEBVIEW2_RUNTIME_KEY}"),
+        (winreg.HKEY_LOCAL_MACHINE, rf"SOFTWARE\Microsoft\EdgeUpdate\Clients\{WEBVIEW2_RUNTIME_KEY}"),
+        (winreg.HKEY_CURRENT_USER, rf"SOFTWARE\Microsoft\EdgeUpdate\Clients\{WEBVIEW2_RUNTIME_KEY}"),
+    ]
+    for hive, key in keys:
+        try:
+            with winreg.OpenKey(hive, key) as handle:
+                version = str(winreg.QueryValueEx(handle, "pv")[0])
+        except OSError:
+            continue
+        if version and version != "0.0.0.0":
+            return True
+    return False
+
+
 def find_edge() -> str | None:
     for base in (os.environ.get("ProgramFiles(x86)"), os.environ.get("ProgramFiles"), os.environ.get("LOCALAPPDATA")):
         if base:

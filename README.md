@@ -16,7 +16,7 @@ Arsenal, HD2MM에서 쓰는 모드 압축 파일(`manifest.json` 포함)을 그�
 
 코드 서명이 없는 프로그램이라 처음 실행할 때 "Windows의 PC 보호" 창이 뜰 수 있습니다. **추가 정보 → 실행** 을 누르세요.
 
-**필요한 것:** Windows 10/11, Microsoft Edge(기본 설치됨). `.7z`, `.rar` 모드를 쓰려면 [7-Zip](https://www.7-zip.org/)도 필요합니다.
+**필요한 것:** Windows 10/11. 화면은 Windows에 기본으로 들어 있는 WebView2 부품으로 그립니다(없는 PC에서는 Edge 창으로 대신 열립니다). `.7z`, `.rar` 모드를 쓰려면 [7-Zip](https://www.7-zip.org/)도 필요합니다.
 
 ## 사용 순서
 
@@ -54,14 +54,17 @@ exe 파일 옆에 `ModocracyData` 폴더를 만들어 두면 그 폴더를 대�
 ## 개발자용
 
 ```bat
-python -m hd2mm                 :: 소스에서 바로 실행
-python -m unittest discover -s tests -t .   :: 테스트
-build.bat                       :: 테스트 후 dist\Modocracy.exe 생성 (PyInstaller 필요)
+build.bat                                          :: .venv를 만들어 필요한 부품을 설치하고, 테스트 후 dist\Modocracy.exe 생성
+.venv\Scripts\python -m hd2mm                       :: 소스에서 바로 실행 (전용 창)
+.venv\Scripts\python -m hd2mm --browser             :: 전용 창 대신 Edge 앱 창으로 실행
+.venv\Scripts\python -m unittest discover -s tests -t .   :: 테스트
 ```
+
+- 실행에 필요한 부품은 `requirements.txt`(pywebview), 빌드에는 `requirements-build.txt`(+ PyInstaller)에 적혀 있습니다.
 
 - `hd2mm/core.py` — 모드 해석(manifest), 보관함, 적용·제거·백업 로직
 - `hd2mm/server.py` — 화면과 로직을 잇는 로컬 서버(127.0.0.1 전용)
-- `hd2mm/app.py` — 실행, 창 열기, 중복 실행 방지
+- `hd2mm/app.py` — 실행, 전용 창(pywebview) 열기, 중복 실행 방지(이미 켜져 있으면 그 창을 앞으로)
 - `hd2mm/web/` — 화면(HTML·CSS·JS)
 - 적용 규칙: 켜진 모드를 목록 위→아래 순서로 훑으며, 같은 아카이브(`9ba626afa44a3aa3` 등)의 패치 파일에
   `patch_0, patch_1, …` 번호를 새로 매겨 게임 `data` 폴더에 복사합니다. 매니저가 설치한 파일 목록은
