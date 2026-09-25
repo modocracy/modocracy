@@ -20,7 +20,7 @@ from pathlib import Path
 
 from . import APP_NAME, LEGACY_APP_NAME, __version__, gameinfo, i18n, updater
 from .i18n import t
-from .core import Library, write_json
+from .core import Library, read_json, write_json
 from .server import AppServer
 
 PREFERRED_PORT = 47815
@@ -214,6 +214,15 @@ def create_server(library: Library, port: int, auto_exit: bool) -> AppServer:
     raise OSError(t("startup.no_port"))
 
 
+def saved_language(data_dir: Path) -> str | None:
+    """설정 파일에서 언어만 읽는다. 보관함을 열기 전에 뜨는 오류 창도 사용자가 고른 언어로 띄우기 위해."""
+    try:
+        value = read_json(data_dir / "settings.json").get("language")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return value if isinstance(value, str) else None
+
+
 def show_error(message: str) -> None:
     if sys.platform == "win32":
         import ctypes
@@ -231,10 +240,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--browser", action="store_true", help="전용 창 대신 Edge 앱 창(또는 기본 브라우저)으로 열기")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args(argv)
-    i18n.set_language(i18n.system_language())  # 설정을 읽기 전에 뜨는 오류 창은 Windows 언어로
 
     custom_dir = args.data_dir or os.environ.get("HD2MM_DATA_DIR")
     data_dir = Path(custom_dir or default_data_dir()).resolve()
+    i18n.set_language(i18n.resolve(saved_language(data_dir)))  # 설정이 "auto"거나 없으면 Windows 언어
     try:
         acquired = acquire_instance_mutex(data_dir)
     except OSError as exc:
@@ -276,7 +285,6 @@ def main(argv: list[str] | None = None) -> int:
     webview = None if args.no_window or args.browser else load_webview()
     try:
         library = Library(data_dir)
-        i18n.set_language(i18n.resolve(library.settings.get("language", "auto")))
         if not library.game_path:
             library.set_game_path(gameinfo.detect_game_path())
         # 전용 창이면 창이 닫힐 때 끝나므로, 연결이 끊기면 스스로 끝나는 기능은 Edge 창 모드에서만 쓴다

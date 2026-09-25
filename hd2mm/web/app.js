@@ -15,6 +15,7 @@ function applyStaticText() {
   document.querySelectorAll('[data-i18n]').forEach((el) => { el.textContent = t(el.dataset.i18n); });
   document.querySelectorAll('[data-i18n-title]').forEach((el) => { el.title = t(el.dataset.i18nTitle); });
   document.querySelectorAll('[data-i18n-aria]').forEach((el) => { el.setAttribute('aria-label', t(el.dataset.i18nAria)); });
+  document.documentElement.classList.add('i18n-ready'); // 번역 전 기본 문구는 CSS가 가려 둔다
 }
 
 // ------------------------------------------------------------ 아이콘
@@ -119,6 +120,12 @@ async function refresh({ quiet = false } = {}) {
     next = await api('/api/state');
   } catch (e) {
     if (!quiet) toast('err', e.message);
+    return;
+  }
+  // 언어가 바뀌었으면(설정 또는 다른 창에서) 새 언어로 다시 불러온다.
+  // 모드 추가 같은 작업 중이거나 대화상자가 열려 있으면 끝난 뒤의 새로고침 때 한다.
+  if (next.lang && next.lang !== LANG && !busy && !$('modalRoot').children.length) {
+    location.reload();
     return;
   }
   const text = JSON.stringify(next);
@@ -758,12 +765,14 @@ async function installUpdate() {
 
 // ------------------------------------------------------------ 설정
 function openSettings() {
-  const updateToggle = h('input', { type: 'checkbox', checked: state?.checkUpdates !== false });
+  // 저장할 때는 바꾼 값만 보낸다 (예: 게임 폴더가 사라진 상태에서도 언어는 바꿀 수 있게)
+  const initial = { gamePath: state?.game.path || '', checkUpdates: state?.checkUpdates !== false, language: state?.language || 'auto' };
+  const updateToggle = h('input', { type: 'checkbox', checked: initial.checkUpdates });
   const languageSelect = h('select', { id: 'languageSelect' },
     [['auto', t('settings.language_auto')], ['ko', '한국어'], ['en', 'English']].map(([value, label]) =>
-      h('option', { value, selected: (state?.language || 'auto') === value }, label)));
+      h('option', { value, selected: initial.language === value }, label)));
   const input = h('input', {
-    type: 'text', id: 'gamePathInput', value: state?.game.path || '', spellcheck: 'false',
+    type: 'text', id: 'gamePathInput', value: initial.gamePath, spellcheck: 'false',
     placeholder: 'C:\\Program Files (x86)\\Steam\\steamapps\\common\\Helldivers 2',
   });
   const help = h('div', { class: 'help' }, t('settings.game_help'));
@@ -820,14 +829,21 @@ function openSettings() {
       {
         label: t('btn.save'), kind: 'primary', value: true,
         onClick: async () => {
+          const changes = {};
+          if (input.value !== initial.gamePath) changes.gamePath = input.value;
+          if (updateToggle.checked !== initial.checkUpdates) changes.checkUpdates = updateToggle.checked;
+          if (languageSelect.value !== initial.language) changes.language = languageSelect.value;
+          if (!Object.keys(changes).length) return true;
           try {
-            await queuedApi('/api/settings', {
-              body: { gamePath: input.value, checkUpdates: updateToggle.checked, language: languageSelect.value },
-            });
+            await queuedApi('/api/settings', { body: changes });
             await refresh();
-            // 언어가 바뀌면 화면 전체를 새 언어로 다시 불러온다
+            // 언어가 바뀌면 화면 전체를 새 언어로 다시 불러온다 (진행 중인 작업이 있으면 끝난 뒤에)
             if (state?.lang && state.lang !== LANG) {
-              location.reload();
+              if (!busy) {
+                location.reload();
+                return true;
+              }
+              toast('ok', t('settings.language_later'));
               return true;
             }
             toast('ok', t('settings.saved'));

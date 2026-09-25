@@ -24,7 +24,9 @@ ROOT = Path(__file__).resolve().parent.parent
 LOADER_ZIP = ROOT / "Bingus-Shared-Loader-v17.zip"
 
 
-class ServerTests(unittest.TestCase):
+class ServerCase(unittest.TestCase):
+    """가짜 게임 폴더와 실제 로컬 서버를 띄우는 준비 과정 (다른 테스트 파일에서도 쓴다)."""
+
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="hd2mm-srv-"))
         self.game = self.tmp / "game"
@@ -58,6 +60,8 @@ class ServerTests(unittest.TestCase):
         except urllib.error.HTTPError as err:
             return err.code, json.loads(err.read() or b"{}")
 
+
+class ServerTests(ServerCase):
     def test_index_contains_token(self):
         with urllib.request.urlopen(self.base + "/", timeout=5) as res:
             html = res.read().decode()

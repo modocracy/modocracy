@@ -31,6 +31,8 @@
 
 * { box-sizing: border-box; }
 html, body { height: 100%; }
+/* 화면 언어로 바꾸기 전의 기본 문구가 잠깐 보이지 않게 (app.js applyStaticText) */
+html:not(.i18n-ready) [data-i18n] { visibility: hidden; }
 body {
   margin: 0;
   display: flex;

@@ -175,7 +175,8 @@ const I18N = {
     "settings.no_7zip": "7-Zip이 없어 .7z/.rar 파일은 추가할 수 없어요.",
     "settings.saved": "설정을 저장했어요.",
     "disconnected.title": "모드 매니저가 종료되었어요",
-    "disconnected.text": "이 창을 닫고 모드 매니저를 다시 실행해 주세요."
+    "disconnected.text": "이 창을 닫고 모드 매니저를 다시 실행해 주세요.",
+    "settings.language_later": "설정을 저장했어요. 진행 중인 작업이 끝나면 새 언어로 바뀌어요."
   },
   "en": {
     "app.title": "Modocracy · Helldivers 2 Mod Manager",
@@ -204,15 +205,15 @@ const I18N = {
     "status.empty.line_some": "Turn on the mods you want and press [Apply].",
     "status.empty.line_none": "Press [+ Add mod] or drag mod archives onto this window.",
     "status.pending.title": "Not applied to the game yet",
-    "status.pending.line": "Press [Apply] to install the enabled mods ({count}) into the game.",
+    "status.pending.line": "Press [Apply] to install {count} enabled mod(s) into the game.",
     "status.dirty.title": "Your changes are not in the game yet",
     "status.dirty.line": "Press [Apply] to update the game.",
     "status.broken.title": "Some installed mod files are missing",
     "status.broken.line": "A game update or file verification may have removed them. Press [Apply] again.",
     "status.ok.title": "Mods are applied to the game",
     "status.ok.line": "Mods: {mods} · Files: {files} · Applied: {time}",
-    "status.unmanaged": "The game folder has mod files that Modocracy did not install ({count}). They will be moved to the backup folder when you apply.",
-    "status.other_deployment": "Another game folder ({path}) still has mod files installed by Modocracy ({count}). Switch to that folder in Settings and press [Remove all] to clean them up.",
+    "status.unmanaged": "{count} mod file(s) in the game folder weren't installed by Modocracy. They will be moved to the backup folder when you apply.",
+    "status.other_deployment": "Another game folder ({path}) still has {count} mod file(s) installed by Modocracy. Switch to that folder in Settings and press [Remove all] to clean them up.",
     "status.game_running": "The game is running. Close the game before applying or removing mods.",
     "switch.on_title": "On — click to turn off",
     "switch.off_title": "Off — click to turn on",
@@ -252,7 +253,7 @@ const I18N = {
     "detail.choose_one": "Choose a version (only one)",
     "detail.suboption_aria": "{name} variant",
     "files.title": "Files to install",
-    "files.sets": "Sets: {count}",
+    "files.sets": "{count} set(s)",
     "files.source": "File in mod",
     "files.target": "Installed as",
     "files.size": "Size",
@@ -288,8 +289,8 @@ const I18N = {
     "purge.text": "Deletes the mod files Modocracy installed in the game folder and returns the game to its original state.",
     "purge.note": "Your mod list (library) stays, so you can install again anytime with [Apply].",
     "result.moved": " Mod files that were already there were moved to the backup folder.",
-    "result.purged": "Removed mod files from the game ({count}).{moved}",
-    "result.deployed": "Done! Installed mods into the game (mods: {mods}, files: {files}).{moved}",
+    "result.purged": "Removed {count} mod file(s) from the game.{moved}",
+    "result.deployed": "Done! Installed {mods} mod(s) ({files} file(s)) into the game.{moved}",
     "result.cleared": "No mods are turned on, so all mod files were removed from the game.{moved}",
     "unmanaged.title": "Other mod files are in the game folder",
     "unmanaged.text": "The game folder has mod files that Modocracy did not install. They may come from another mod manager (Arsenal, HD2MM, etc.) or were added by hand.",
@@ -349,6 +350,7 @@ const I18N = {
     "settings.no_7zip": "7-Zip is not installed, so .7z/.rar files can't be added.",
     "settings.saved": "Settings saved.",
     "disconnected.title": "Modocracy has closed",
-    "disconnected.text": "Close this window and start Modocracy again."
+    "disconnected.text": "Close this window and start Modocracy again.",
+    "settings.language_later": "Settings saved. The new language will apply when the current task finishes."
   }
 };

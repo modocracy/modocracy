@@ -338,20 +338,24 @@ class Handler(BaseHTTPRequestHandler):
             log.info("%s 완료: %s", path, result)
             return result
         if path == "/api/settings":
-            if "language" in body and body["language"] not in i18n.SETTINGS:
-                raise ModError(t("err.bad_request"))
+            # 보낸 값을 모두 검사한 뒤 한 번에 저장한다 (하나라도 잘못되면 아무것도 바꾸지 않음)
+            changes = {}
+            if "language" in body:
+                if body["language"] not in i18n.SETTINGS:
+                    raise ModError(t("err.bad_request"))
+                changes["language"] = body["language"]
             if "gamePath" in body:
                 game, problem = gameinfo.check_game_path(body.get("gamePath"))
                 if problem and game is not None and not body.get("force"):
                     raise ModError(problem)
-                lib.set_game_path(str(game) if game else None)
-            if "language" in body:
-                lib.settings["language"] = body["language"]
-                lib.save()
-                i18n.set_language(i18n.resolve(body["language"]))
+                changes["gamePath"] = str(game) if game else None
             if "checkUpdates" in body:
-                lib.settings["checkUpdates"] = bool(body["checkUpdates"])
+                changes["checkUpdates"] = bool(body["checkUpdates"])
+            if changes:
+                lib.settings.update(changes)
                 lib.save()
+            if "language" in changes:
+                i18n.set_language(i18n.resolve(changes["language"]))
             return {"ok": True}
         if path == "/api/update/install":
             return _install_update(self.server)
@@ -544,10 +548,13 @@ def build_state(lib: Library) -> dict:
                 "mode": info.mode,
                 "options": [
                     {
-                        "name": o.name, "description": o.description, "image": url(o.image),
-                        "subs": [{"name": s.name, "description": s.description, "image": url(s.image)} for s in o.subs],
+                        "name": o.name or t("option.default", n=i + 1), "description": o.description, "image": url(o.image),
+                        "subs": [
+                            {"name": s.name or t("suboption.default", n=j + 1), "description": s.description, "image": url(s.image)}
+                            for j, s in enumerate(o.subs)
+                        ],
                     }
-                    for o in info.options
+                    for i, o in enumerate(info.options)
                 ],
                 "state": snap.state,
                 "files": [

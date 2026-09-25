@@ -19,7 +19,6 @@ from datetime import datetime
 from pathlib import Path
 
 from .gameinfo import CREATE_NO_WINDOW, find_7zip
-from . import i18n
 from .i18n import t
 
 PATCH_RE = re.compile(r"^([0-9a-f]{16})\.patch_(\d+)(\.gpu_resources|\.stream)?$", re.IGNORECASE)
@@ -231,18 +230,17 @@ def _existing_file(root: Path, rel) -> str | None:
     return target.relative_to(root.resolve()).as_posix()
 
 
-def _parse_option(root: Path, raw: dict, fallback: str) -> ModOption:
+def _parse_option(root: Path, raw: dict) -> ModOption:
+    # 이름이 없으면 빈 칸으로 두고, 화면에 보낼 때 그 언어로 "옵션 1" 같은 이름을 붙인다
     opt = ModOption(
-        name=str(_get(raw, "Name") or "").strip() or fallback,
+        name=str(_get(raw, "Name") or "").strip(),
         description=str(_get(raw, "Description") or "").strip(),
         image=_existing_file(root, _get(raw, "Image")),
         include=_str_list(_get(raw, "Include")),
     )
     subs = _get(raw, "SubOptions")
     if isinstance(subs, list):
-        opt.subs = [
-            _parse_option(root, s, t("suboption.default", n=i + 1)) for i, s in enumerate(subs) if isinstance(s, dict)
-        ]
+        opt.subs = [_parse_option(root, s) for s in subs if isinstance(s, dict)]
     return opt
 
 
@@ -341,9 +339,7 @@ def parse_mod(root: Path, fallback_name: str | None = None) -> ModInfo:
             info.options = [ModOption(name=o, include=[o]) for o in raw]
         elif any(isinstance(o, dict) for o in raw):
             info.kind, info.mode = "v1", "multi"
-            info.options = [
-                _parse_option(root, o, t("option.default", n=i + 1)) for i, o in enumerate(raw) if isinstance(o, dict)
-            ]
+            info.options = [_parse_option(root, o) for o in raw if isinstance(o, dict)]
         else:
             info.kind = "v1" if _get(data, "Version") else "legacy"
     if len(info.options) == 1 and not info.options[0].subs:
@@ -669,8 +665,7 @@ class Library:
     def info(self, entry: dict) -> ModInfo:
         """모드 정보를 읽는다. 모드 폴더 구조와 설정 파일이 그대로면 전에 읽은 결과를 다시 쓴다."""
         root = self.mods_dir / entry["id"]
-        # 이름 없는 옵션의 기본 이름("옵션 1")이 언어마다 달라서 언어도 함께 비교한다
-        stamp = (_tree_stamp(root), entry.get("fallbackName"), i18n.current())
+        stamp = (_tree_stamp(root), entry.get("fallbackName"))
         cached = self._info_cache.get(entry["id"])
         if cached and cached[0] == stamp:
             return cached[1]

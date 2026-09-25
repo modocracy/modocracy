@@ -6,20 +6,18 @@ import re
 import shutil
 import string
 import tempfile
-import threading
 import unittest
 import urllib.request
 from pathlib import Path
 from unittest import mock
 
-from hd2mm import gameinfo, i18n
-from hd2mm.app import web_dir
+from hd2mm import app, gameinfo, i18n
 from hd2mm.core import Library, analyze
-from hd2mm.server import AppServer
+from hd2mm.server import build_state
 from tests.test_core import make_zip
-from tests.test_server import ServerTests
+from tests.test_server import ServerCase
 
-WEB = web_dir()
+WEB = app.web_dir()
 
 
 def fields(text: str) -> set[str]:
@@ -108,7 +106,10 @@ class EnglishCoreTests(LanguageCase):
         self.lib = Library(self.tmp / "data")
 
     def import_pack(self) -> str:
-        manifest = {"Version": 1, "Name": "Pack", "Options": [{"Include": ["a"]}, {"Include": ["b"]}]}
+        manifest = {"Version": 1, "Name": "Pack", "Options": [
+            {"Include": ["a"], "SubOptions": [{"Include": ["a"]}, {"Name": "Named", "Include": ["a"]}]},
+            {"Include": ["b"]},
+        ]}
         archive = make_zip(self.tmp / "pack.zip", {
             "manifest.json": json.dumps(manifest),
             "a/1111111111111111.patch_0": "a",
@@ -117,11 +118,18 @@ class EnglishCoreTests(LanguageCase):
         return self.lib.import_archive(archive, "pack.zip")["id"]
 
     def test_default_option_names_follow_language(self):
-        i18n.set_language("ko")
         self.import_pack()
-        self.assertEqual([o.name for o in self.lib.snapshot()[0].info.options], ["옵션 1", "옵션 2"])
-        i18n.set_language("en")  # 기억해 둔 모드 정보도 새 언어로 다시 읽는다
-        self.assertEqual([o.name for o in self.lib.snapshot()[0].info.options], ["Option 1", "Option 2"])
+
+        def names():
+            options = build_state(self.lib)["mods"][0]["options"]
+            return [o["name"] for o in options], [s["name"] for s in options[0]["subs"]]
+
+        i18n.set_language("ko")
+        self.assertEqual(names(), (["옵션 1", "옵션 2"], ["선택 1", "Named"]))
+        i18n.set_language("en")
+        self.assertEqual(names(), (["Option 1", "Option 2"], ["Choice 1", "Named"]))
+        # 모드 정보 자체(기억해 두는 값)에는 언어별 이름을 넣지 않는다
+        self.assertEqual([o.name for o in self.lib.snapshot()[0].info.options], ["", ""])
 
     def test_issue_text_in_english(self):
         mod_id = self.import_pack()
@@ -136,9 +144,7 @@ class EnglishCoreTests(LanguageCase):
         self.assertEqual(problem, i18n.MESSAGES["en"]["game.missing"])
 
 
-class EnglishServerTests(ServerTests):
-    """ServerTests 의 준비 과정을 빌려 쓴다 (테스트 메서드는 여기 것만 돌린다)."""
-
+class EnglishServerTests(ServerCase):
     def setUp(self):
         self.addCleanup(i18n.set_language, i18n.current())
         super().setUp()
@@ -173,16 +179,50 @@ class EnglishServerTests(ServerTests):
         self.assertEqual(self.lib.game_path, before)
         self.assertNotIn("language", self.lib.settings)
 
+    def test_language_can_change_while_game_folder_is_missing(self):
+        shutil.rmtree(self.game)  # 게임을 옮기거나 지워서 저장된 경로가 틀어진 상태
+        status, _ = self.request("/api/settings", body={"language": "en"})
+        self.assertEqual(status, 200)
+        self.assertEqual(self.lib.settings["language"], "en")
+
+    def test_settings_are_saved_once_and_not_at_all_on_error(self):
+        with mock.patch.object(self.lib, "save", wraps=self.lib.save) as save:
+            body = {"language": "ko", "checkUpdates": False, "gamePath": str(self.game)}
+            status, _ = self.request("/api/settings", body=body)
+            self.assertEqual((status, save.call_count), (200, 1))
+            status, _ = self.request("/api/settings", body={"language": "en", "gamePath": str(self.tmp / "nope")})
+            self.assertEqual((status, save.call_count), (400, 1))
+        self.assertEqual(self.lib.settings["language"], "ko")
+        self.assertEqual(i18n.current(), "ko")
+
     def test_i18n_script_is_served(self):
         with urllib.request.urlopen(self.base + "/i18n.js", timeout=5) as res:
             self.assertIn("javascript", res.headers["Content-Type"])
             self.assertIn(b"const I18N", res.read())
 
 
-# ServerTests 의 테스트가 여기서 한 번 더 돌지 않도록 이 모듈에서는 빼 둔다
-for _name in [n for n in dir(ServerTests) if n.startswith("test_")]:
-    setattr(EnglishServerTests, _name, None)
-del ServerTests
+class StartupLanguageTests(LanguageCase):
+    def test_saved_language_reads_only_valid_text(self):
+        with tempfile.TemporaryDirectory(prefix="hd2mm-lang-") as tmp:
+            data_dir = Path(tmp)
+            self.assertIsNone(app.saved_language(data_dir))  # 설정 파일이 아직 없음
+            cases = [("{broken", None), ('["en"]', None), ('{"language": 3}', None), ('{"language": "en"}', "en")]
+            for content, expected in cases:
+                (data_dir / "settings.json").write_text(content, encoding="utf-8")
+                self.assertEqual(app.saved_language(data_dir), expected, content)
+
+    def test_startup_errors_use_saved_language(self):
+        with tempfile.TemporaryDirectory(prefix="hd2mm-lang-") as tmp,                 mock.patch.object(i18n, "system_language", return_value="ko"),                 mock.patch.object(app, "acquire_instance_mutex", return_value=False),                 mock.patch.object(app, "running_instance", return_value=None),                 mock.patch.object(app, "show_error") as error,                 mock.patch.object(app.time, "monotonic", side_effect=[0, 0, 11]),                 mock.patch.object(app.time, "sleep"):
+            (Path(tmp) / "settings.json").write_text(json.dumps({"language": "en"}), encoding="utf-8")
+            self.assertEqual(app.main(["--data-dir", tmp]), 1)
+            error.assert_called_once_with(i18n.MESSAGES["en"]["startup.not_responding"])
+            self.assertEqual(i18n.current(), "en")
+
+    def test_startup_uses_windows_language_when_auto(self):
+        with tempfile.TemporaryDirectory(prefix="hd2mm-lang-") as tmp,                 mock.patch.object(i18n, "system_language", return_value="en"),                 mock.patch.object(app, "acquire_instance_mutex", return_value=False):
+            (Path(tmp) / "settings.json").write_text(json.dumps({"language": "auto"}), encoding="utf-8")
+            self.assertEqual(app.main(["--data-dir", tmp, "--no-window"]), 1)
+            self.assertEqual(i18n.current(), "en")
 
 
 if __name__ == "__main__":

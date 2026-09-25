@@ -150,13 +150,13 @@ MESSAGES: dict[str, dict[str, str]] = {
         "err.copy_failed": "An error occurred while copying files: {detail}",
         "err.remove_some_failed": "Some files could not be removed. Make sure the game is fully closed and try again.",
         "issue.no_files": "The selected options don't include any files to install. Please check the options.",
-        "issue.at_least": " ({revision} or newer)",
+        "issue.at_least": " ({revision} or later)",
         "issue.get_from": " Get it from: {url}",
         "issue.optional_requirement": "‘{name}’{need} is only needed for some features{purpose}. "
                                       "You don't need it if you don't use them.{where}",
         "issue.requirement_missing": "This mod requires ‘{name}’{need}. Download it separately and add it to the list.{where}",
         "issue.requirement_disabled": "The required mod ‘{name}’ is turned off. Please turn it on.",
-        "issue.requirement_outdated": "‘{name}’ needs to be updated to {revision} or newer.",
+        "issue.requirement_outdated": "‘{name}’ needs to be updated to {revision} or later.",
         "issue.loader_last": "A shared loader must be at the bottom of the list to load the other mods correctly.",
         "issue.duplicate": "The same mod is turned on twice. Keep only one of them on.",
         "issue.older_game": "This mod was made for game version {mod} (your game: {game}). "
