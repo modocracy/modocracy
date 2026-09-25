@@ -104,6 +104,28 @@ class ServerTests(unittest.TestCase):
         _, state = self.request("/api/state")
         self.assertEqual(state["status"]["state"], "dirty")
 
+    def test_folder_dialog_does_not_block_other_requests(self):
+        opened, release = threading.Event(), threading.Event()
+
+        def slow_dialog(server, initial):
+            opened.set()
+            release.wait(10)
+            return None
+
+        with mock.patch("hd2mm.server._pick_folder", side_effect=slow_dialog):
+            worker = threading.Thread(target=self.request, args=("/api/pick-folder",), kwargs={"body": {}})
+            worker.start()
+            self.assertTrue(opened.wait(5))
+            try:
+                status, state = self.request("/api/state")  # 폴더 선택 창이 열려 있어도 응답해야 함
+                self.assertEqual(status, 200)
+                self.assertEqual(state["status"]["otherDeployments"], [])
+                status, _ = self.request("/api/order", body={"ids": []})
+                self.assertEqual(status, 200)
+            finally:
+                release.set()
+                worker.join(5)
+
     def test_mod_file_cannot_escape_mod_folder(self):
         status, _ = self.request("/api/mods/unknown/file?path=../settings.json")
         self.assertEqual(status, 400)

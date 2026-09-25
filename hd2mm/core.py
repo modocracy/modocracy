@@ -460,6 +460,7 @@ class PlanItem:
     mod_name: str
     patch: PatchSet
     target: str  # 예: 9ba626afa44a3aa3.patch_1
+    root: Path   # 모드 폴더 (서명에는 이 폴더 기준 상대 경로를 쓴다)
 
 
 def build_plan(snapshot: list[ModSnapshot]) -> list[PlanItem]:
@@ -468,14 +469,16 @@ def build_plan(snapshot: list[ModSnapshot]) -> list[PlanItem]:
     for snap in snapshot:
         if not snap.enabled:
             continue
+        root = snap.info.root.resolve()
         for ps in snap.sets:
             number = counters.get(ps.archive, 0)
             counters[ps.archive] = number + 1
-            plan.append(PlanItem(snap.id, snap.info.name, ps, f"{ps.archive}.patch_{number}"))
+            plan.append(PlanItem(snap.id, snap.info.name, ps, f"{ps.archive}.patch_{number}", root))
     return plan
 
 
 def plan_signature(plan: list[PlanItem]) -> str:
+    """적용 내용의 지문. 보관 폴더를 옮겨도 바뀌지 않도록 모드 ID와 상대 경로만 쓴다."""
     digest = hashlib.sha256()
     for item in plan:
         for suffix, src in item.patch.sources():
@@ -484,7 +487,11 @@ def plan_signature(plan: list[PlanItem]) -> str:
             except OSError:
                 stat = None
             size, mtime = (stat.st_size, stat.st_mtime_ns) if stat else (0, 0)
-            digest.update(f"{item.target}{suffix}|{src}|{size}|{mtime}\n".encode("utf-8"))
+            try:
+                rel = src.relative_to(item.root).as_posix() if src else ""
+            except ValueError:
+                rel = src.name
+            digest.update(f"{item.target}{suffix}|{item.mod_id}/{rel}|{size}|{mtime}\n".encode("utf-8"))
     return digest.hexdigest()
 
 
@@ -496,10 +503,9 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _same_path(a, b) -> bool:
-    if not a or not b:
-        return False
-    return os.path.normcase(os.path.abspath(str(a))) == os.path.normcase(os.path.abspath(str(b)))
+def _record_key(game_path) -> str:
+    """같은 폴더면 표기(대소문자·구분자)가 달라도 같은 값."""
+    return os.path.normcase(os.path.abspath(str(game_path)))
 
 
 class Library:
@@ -671,25 +677,54 @@ class Library:
 
     # ---- 게임 폴더 상태
 
-    def _load_record(self, game_path: Path) -> dict | None:
+    def _load_records(self) -> dict[str, dict]:
+        """게임 폴더별 적용 기록. 폴더를 바꿔도 이전 폴더에 설치한 파일을 놓치지 않도록 따로 보관한다."""
         if not self.record_path.exists():
-            return None
+            return {}
         try:
-            record = read_json(self.record_path)
+            data = read_json(self.record_path)
         except (ValueError, OSError):
-            return None
-        if not isinstance(record, dict) or not _same_path(record.get("gamePath"), game_path):
-            return None
-        return record
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        if isinstance(data.get("records"), dict):
+            return {k: v for k, v in data["records"].items() if isinstance(v, dict) and v.get("gamePath")}
+        if data.get("gamePath"):  # 예전 형식: 기록이 하나뿐
+            return {_record_key(data["gamePath"]): data}
+        return {}
+
+    def _load_record(self, game_path: Path) -> dict | None:
+        return self._load_records().get(_record_key(game_path))
+
+    def _write_record(self, game_path: Path, record: dict) -> None:
+        records = self._load_records()
+        records[_record_key(game_path)] = record
+        write_json(self.record_path, {"version": 2, "records": records})
 
     def _save_record(self, game_path: Path, files: list[dict], signature: str | None, mods: list[dict]) -> None:
-        write_json(self.record_path, {
+        self._write_record(game_path, {
             "gamePath": str(game_path),
             "deployedAt": datetime.now().isoformat(timespec="seconds"),
             "signature": signature,
             "files": files,
             "mods": mods,
         })
+
+    def other_deployments(self, game_path: Path | None) -> list[dict]:
+        """지금 설정된 곳이 아닌 게임 폴더에 이 매니저가 설치해 두고 아직 남아 있는 파일 수."""
+        current = _record_key(game_path) if game_path else None
+        result = []
+        for key, record in self._load_records().items():
+            if key == current:
+                continue
+            data_dir = Path(record["gamePath"]) / "data"
+            left = [
+                f for f in record.get("files") or []
+                if isinstance(f, dict) and "name" in f and self._matches_record(data_dir / f["name"], f)
+            ]
+            if left:
+                result.append({"gamePath": record["gamePath"], "files": len(left)})
+        return result
 
     def status(self, game_path: Path, snapshot: list[ModSnapshot]) -> dict:
         data_dir = game_path / "data"

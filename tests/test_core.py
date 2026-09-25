@@ -320,10 +320,10 @@ class ReviewRegressionTests(TempCase):
     def test_old_record_uses_size_and_missing_file_is_broken(self):
         self.import_patch()
         self.lib.deploy(self.game)
-        record = json.loads(self.lib.record_path.read_text(encoding="utf-8"))
+        record = self.lib._load_record(self.game)
         for item in record["files"]:
             self.assertIsInstance(item.pop("mtime"), int)
-        self.lib.record_path.write_text(json.dumps(record), encoding="utf-8")
+        self.lib._write_record(self.game, record)
         target = self.game / "data" / f"{ARCHIVE}.patch_0"
         target.write_bytes(b"modified")
         self.assertEqual(self.lib.status(self.game, self.lib.snapshot())["state"], "ok")
@@ -345,7 +345,7 @@ class ReviewRegressionTests(TempCase):
             with self.assertRaises(ModError):
                 self.lib.deploy(self.game)
         self.assertEqual(self.game_files(), [])
-        self.assertEqual(json.loads(self.lib.record_path.read_text(encoding="utf-8"))["files"], [])
+        self.assertEqual(self.lib._load_record(self.game)["files"], [])
         self.lib.deploy(self.game)
         self.assertEqual(self.lib.status(self.game, self.lib.snapshot())["state"], "ok")
 
@@ -390,6 +390,42 @@ class ReviewRegressionTests(TempCase):
         self.assertEqual(len(self.lib.settings["mods"]), 1)
         self.assertFalse(entry["enabled"])
         self.assertEqual([p.name for p in self.lib.mods_dir.iterdir()], [old_id])
+
+
+class SecondReviewTests(TempCase):
+    def import_patch(self):
+        archive = make_zip(self.tmp / "mod.zip", {f"{ARCHIVE}.patch_0": "p"})
+        return self.lib.import_archive(archive, archive.name)["id"]
+
+    def test_moving_library_keeps_applied_state(self):
+        self.import_patch()
+        self.lib.deploy(self.game)
+        moved = self.tmp / "moved-library"
+        os.replace(self.lib.data_dir, moved)  # 예: HD2ModManager → Modocracy 폴더 이동
+        reopened = Library(moved)
+        self.assertEqual(reopened.status(self.game, reopened.snapshot())["state"], "ok")
+
+    def test_records_are_kept_per_game_folder(self):
+        self.import_patch()
+        other = self.tmp / "game2"
+        (other / "data").mkdir(parents=True)
+        self.lib.deploy(self.game)
+        self.lib.deploy(other)
+        self.assertEqual(self.lib.other_deployments(other), [{"gamePath": str(self.game), "files": 3}])
+        self.assertEqual(self.lib.status(self.game, self.lib.snapshot())["state"], "ok")
+        self.assertEqual(self.lib.purge(self.game)["removed"], 3)
+        self.assertEqual(self.game_files(), [])
+        self.assertEqual(self.lib.other_deployments(other), [])
+        self.assertEqual(self.lib.status(other, self.lib.snapshot())["state"], "ok")
+
+    def test_reads_old_single_record_file(self):
+        self.import_patch()
+        self.lib.deploy(self.game)
+        record = self.lib._load_record(self.game)
+        self.lib.record_path.write_text(json.dumps(record), encoding="utf-8")  # 예전 형식
+        self.assertEqual(self.lib.status(self.game, self.lib.snapshot())["state"], "ok")
+        self.assertEqual(self.lib.purge(self.game)["removed"], 3)
+        self.assertEqual(self.game_files(), [])
 
 
 if __name__ == "__main__":

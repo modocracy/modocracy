@@ -26,6 +26,8 @@ STATIC_FILES = {
     "/icon.svg": "icon.svg",
 }
 MAX_JSON_BYTES = 1024 * 1024
+# 보관함을 건드리지 않는 요청. 폴더 선택 창처럼 오래 걸려도 다른 요청을 막지 않도록 잠금 없이 처리한다.
+LOCK_FREE_POSTS = {"/api/pick-folder", "/api/detect-game"}
 RASTER_TYPES = {
     ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
     ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp",
@@ -231,8 +233,11 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/import":
                 return self._import(query.get("name", [""])[0])
             body = self._read_json()
-            with self.server.lock:
+            if path in LOCK_FREE_POSTS:
                 result = self._post(path, body)
+            else:
+                with self.server.lock:
+                    result = self._post(path, body)
             if result is None:
                 return self._error("not found", 404)
             self._send_json(result)
@@ -374,6 +379,7 @@ def build_state(lib: Library) -> dict:
     snapshot = lib.snapshot()
     issues = analyze(snapshot, version)
     status = lib.status(game, snapshot) if game and not problem else {"state": "nogame", "unmanaged": []}
+    status["otherDeployments"] = lib.other_deployments(game if game and not problem else None)
     targets = status.pop("planTargets", {})
     mods = []
     for snap in snapshot:

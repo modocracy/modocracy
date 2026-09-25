@@ -189,6 +189,9 @@ function renderStatus() {
   if (s.unmanaged?.length) {
     lines.push({ cls: 'warn', text: `이 매니저가 설치하지 않은 모드 파일 ${s.unmanaged.length}개가 게임 폴더에 있어요. 적용할 때 백업 폴더로 옮겨 드려요.` });
   }
+  for (const other of s.otherDeployments || []) {
+    lines.push({ cls: 'warn', text: `다른 게임 폴더(${other.gamePath})에 이 매니저가 설치한 모드 파일 ${other.files}개가 남아 있어요. 설정에서 그 폴더로 바꾼 뒤 [모두 제거]로 정리할 수 있어요.` });
+  }
   if (g.running) lines.push({ cls: 'err', text: '게임이 실행 중이에요. 적용·제거하려면 게임을 먼저 꺼 주세요.' });
 
   $('statusBar').className = `statusbar tone-${tone}`;
