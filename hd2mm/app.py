@@ -269,7 +269,8 @@ def main(argv: list[str] | None = None) -> int:
         show_existing(existing)
         return 0
 
-    updater.cleanup_leftovers()  # 지난 업데이트가 남긴 옛 exe 등
+    # 업데이트 후 다시 켤 때도 같은 보관 폴더·창 방식으로 켜지도록 넘길 옵션
+    updater.RESTART_ARGS[:] = (["--data-dir", str(data_dir)] if args.data_dir else []) + (["--browser"] if args.browser else [])
     webview = None if args.no_window or args.browser else load_webview()
     try:
         library = Library(data_dir)
@@ -282,6 +283,8 @@ def main(argv: list[str] | None = None) -> int:
         show_error(f"모드 매니저를 시작하지 못했어요.\n\n{exc}")
         return 1
 
+    # 화면이 처음 제대로 뜨면 지난 업데이트가 남긴 옛 exe를 지운다 (교체 작업은 이것으로 성공을 확인한다)
+    server.on_ready = updater.cleanup_leftovers
     url = f"http://127.0.0.1:{server.port}/"
     instance_file = data_dir / "instance.json"
     write_json(instance_file, {"port": server.port, "pid": os.getpid()})

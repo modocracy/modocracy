@@ -56,7 +56,7 @@ def fetch_latest(timeout: float = 8) -> Release:
         raise ModError("새 버전 정보를 읽지 못했어요.")
     asset = next((a for a in data.get("assets") or [] if isinstance(a, dict) and a.get("name") == ASSET_NAME), {})
     url = str(asset.get("browser_download_url") or "")
-    digest = str(asset.get("digest") or "")
+    digest = str(asset.get("digest") or "").lower()
     return Release(
         version=str(data.get("tag_name") or "").strip().lstrip("vV"),
         url=str(data.get("html_url") or RELEASES_PAGE),
@@ -112,32 +112,85 @@ def download(release: Release, exe: Path, timeout: float = 60) -> Path:
     return target
 
 
+# 이 프로그램이 끝난 뒤 실행되는 교체 작업. {이름} 자리는 build_swap_script가 채운다.
 SWAP_SCRIPT = """
-$exe = '{exe}'; $new = '{new}'; $old = '{old}'
-try {{ Wait-Process -Id {pid} -Timeout 120 -ErrorAction Stop }} catch {{ }}
-for ($i = 0; $i -lt 100; $i++) {{
+$ErrorActionPreference = 'Stop'
+$exe = '{exe}'; $new = '{new}'; $old = '{old}'; $failed = '{failed}'
+$arguments = '{arguments}'
+function Start-App {{ if ($arguments) {{ Start-Process -FilePath $exe -ArgumentList $arguments -PassThru }} else {{ Start-Process -FilePath $exe -PassThru }} }}
+
+# 1) 이 프로그램이 완전히 끝날 때까지 기다린다. 끝나지 않으면 아무 파일도 건드리지 않는다.
+$deadline = (Get-Date).AddSeconds({wait_seconds})
+while (Get-Process -Id {pid} -ErrorAction SilentlyContinue) {{
+  if ((Get-Date) -gt $deadline) {{ exit 1 }}
+  Start-Sleep -Milliseconds 300
+}}
+
+# 2) exe 바꾸기. 실패하면 되돌리고 다시 시도하며, exe가 없는 상태에서는 백업을 절대 지우지 않는다.
+$swapped = $false
+for ($i = 0; $i -lt {retries} -and -not $swapped; $i++) {{
   try {{
+    if (-not (Test-Path -LiteralPath $exe) -and (Test-Path -LiteralPath $old)) {{
+      Move-Item -LiteralPath $old -Destination $exe -Force
+    }}
     if (Test-Path -LiteralPath $old) {{ Remove-Item -LiteralPath $old -Force }}
     Move-Item -LiteralPath $exe -Destination $old -Force
-    try {{ Move-Item -LiteralPath $new -Destination $exe -Force }}
+    try {{ Move-Item -LiteralPath $new -Destination $exe -Force; $swapped = $true }}
     catch {{ Move-Item -LiteralPath $old -Destination $exe -Force; throw }}
-    break
   }} catch {{ Start-Sleep -Milliseconds 200 }}
 }}
-Start-Process -FilePath $exe
+if (-not $swapped) {{
+  try {{ if (-not (Test-Path -LiteralPath $exe)) {{ Move-Item -LiteralPath $old -Destination $exe -Force }} }} catch {{ }}
+  try {{ Start-App | Out-Null }} catch {{ }}
+  exit 2
+}}
+
+# 3) 새 버전을 켜고, 화면까지 제대로 뜨는지 본다 (새 버전은 화면이 뜨면 .old.exe를 지운다).
+#    그 전에 꺼져 버리면 옛 버전으로 되돌려 다시 켠다.
+$proc = Start-App
+$deadline = (Get-Date).AddSeconds({verify_seconds})
+while ((Get-Date) -lt $deadline) {{
+  Start-Sleep -Seconds 1
+  if (-not (Test-Path -LiteralPath $old)) {{ exit 0 }}
+  if ($proc.HasExited) {{
+    try {{
+      Move-Item -LiteralPath $exe -Destination $failed -Force
+      Move-Item -LiteralPath $old -Destination $exe -Force
+      Remove-Item -LiteralPath $failed -Force -ErrorAction SilentlyContinue
+      Start-App | Out-Null
+    }} catch {{ }}
+    exit 3
+  }}
+}}
 """
+
+# 다시 켤 때 그대로 넘길 실행 옵션 (app.py가 채운다: --data-dir, --browser)
+RESTART_ARGS: list[str] = []
+
+
+def _ps_quote(text: str) -> str:
+    return str(text).replace("'", "''")
+
+
+def build_swap_script(exe: Path, new_file: Path, pid: int, wait_seconds: int = 3600,
+                      verify_seconds: int = 30, arguments: list[str] | None = None, retries: int = 100) -> str:
+    # 경로에는 큰따옴표가 들어갈 수 없으므로 빈칸이 있는 인수는 큰따옴표로 감싸면 된다
+    joined = " ".join(f'"{a}"' if (" " in a or not a) else a for a in (arguments or []))
+    return SWAP_SCRIPT.format(
+        exe=_ps_quote(exe), new=_ps_quote(new_file), old=_ps_quote(exe.with_name(exe.stem + ".old.exe")),
+        failed=_ps_quote(exe.with_name(exe.stem + ".failed.exe")), arguments=_ps_quote(joined),
+        pid=int(pid), wait_seconds=int(wait_seconds), verify_seconds=int(verify_seconds), retries=int(retries),
+    )
+
+
+def powershell_command(script: str) -> list[str]:
+    encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+    return ["powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-EncodedCommand", encoded]
 
 
 def schedule_swap(exe: Path, new_file: Path) -> None:
     """이 프로그램이 끝나면 exe를 새 파일로 바꾸고 다시 켜는 PowerShell 작업을 띄운다."""
-    def quote(path: Path) -> str:
-        return str(path).replace("'", "''")
-
-    script = SWAP_SCRIPT.format(
-        exe=quote(exe), new=quote(new_file), old=quote(exe.with_name(exe.stem + ".old.exe")), pid=os.getpid(),
-    )
-    encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
-    command = ["powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-EncodedCommand", encoded]
+    command = powershell_command(build_swap_script(exe, new_file, os.getpid(), arguments=RESTART_ARGS))
     flags = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
     env = clean_environment()
     try:
@@ -163,7 +216,11 @@ def clean_environment() -> dict[str, str]:
 
 
 def cleanup_leftovers() -> None:
-    """지난 업데이트가 남긴 파일(옛 exe, 받다 만 파일)을 지운다."""
+    """지난 업데이트가 남긴 파일(옛 exe, 받다 만 파일)을 지운다.
+
+    새 버전의 화면이 제대로 뜬 뒤에 불러야 한다: 교체 작업은 .old.exe가 지워진 것을 보고
+    새 버전이 정상으로 켜졌다고 판단한다 (그 전에 꺼지면 옛 버전으로 되돌린다).
+    """
     exe = current_exe()
     if exe is None:
         return

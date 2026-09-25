@@ -28,7 +28,7 @@ STATIC_FILES = {
 MAX_JSON_BYTES = 1024 * 1024
 # 보관함을 건드리지 않는 요청. 폴더 선택 창처럼 오래 걸려도 다른 요청을 막지 않도록 잠금 없이 처리한다.
 # 업데이트 설치도 보관함을 건드리지 않는다 (내려받는 동안 화면이 멈추지 않도록)
-LOCK_FREE_POSTS = {"/api/pick-folder", "/api/detect-game", "/api/update/install"}
+LOCK_FREE_POSTS = {"/api/pick-folder", "/api/detect-game", "/api/update/install", "/api/update/check"}
 UPDATE_CHECK_SECONDS = 30 * 60  # 새 버전 확인 결과를 다시 쓰는 시간
 RASTER_TYPES = {
     ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
@@ -56,6 +56,8 @@ class AppServer(ThreadingHTTPServer):
         self.folder_picker = None
         self.on_focus = None
         self.on_exit = None  # 전용 창이면 창을 닫는 함수 (업데이트 후 다시 켤 때 쓴다)
+        self.on_ready = None  # 화면이 처음 제대로 뜨면 한 번 부른다 (업데이트 뒤 옛 exe 정리)
+        self.updating = False  # 새 버전을 받는 중: 다른 변경 작업은 받지 않는다
         self.update_cache: tuple[float, updater.Release] | None = None
         if auto_exit:
             self.start_auto_exit()
@@ -94,7 +96,7 @@ class AppServer(ThreadingHTTPServer):
 
     def begin_operation(self) -> bool:
         with self.client_lock:
-            if self.stopping:
+            if self.stopping or self.updating:
                 return False
             self.active_operations += 1
             return True
@@ -182,11 +184,15 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json({"app": "hd2mm", "version": __version__, "dataDir": str(self.server.library.data_dir)})
             if path == "/api/state":
                 with self.server.lock:
-                    return self._send_json(build_state(self.server.library))
+                    self._send_json(build_state(self.server.library))
+                ready, self.server.on_ready = self.server.on_ready, None
+                if ready:
+                    ready()
+                return
             if path == "/api/events":
                 return self._events()
             if path == "/api/update":
-                return self._send_json(update_info(self.server, force="force" in query))
+                return self._send_json(update_info(self.server))  # 다시 묻기(force)는 토큰이 필요한 POST로만
             if path == "/api/focus":
                 # 두 번째로 실행했을 때 이미 열린 창을 앞으로 가져온다 (창을 보여 주는 것 말고는 하는 일이 없다)
                 focus = self.server.on_focus
@@ -269,6 +275,8 @@ class Handler(BaseHTTPRequestHandler):
         if not self._host_ok() or self.headers.get("X-HD2MM-Token") != self.server.token:
             return self._error("forbidden", 403)
         if not self.server.begin_operation():
+            if self.server.updating:
+                return self._error("새 버전으로 업데이트하는 중이에요. 잠시만 기다려 주세요.", 503)
             return self._error("프로그램이 종료 중이에요. 다시 실행해 주세요.", 503)
         try:
             self._handle_post()
@@ -338,6 +346,8 @@ class Handler(BaseHTTPRequestHandler):
             return {"ok": True}
         if path == "/api/update/install":
             return _install_update(self.server)
+        if path == "/api/update/check":
+            return update_info(self.server, force=True)
         if path == "/api/detect-game":
             return {"path": gameinfo.detect_game_path()}
         if path == "/api/pick-folder":
@@ -452,18 +462,30 @@ def update_info(server: AppServer, force: bool = False) -> dict:
 def _install_update(server: AppServer) -> dict:
     """새 버전을 받아 검사하고, 이 프로그램이 끝나면 바꿔 끼워 다시 켜지도록 한다."""
     with server.client_lock:
-        others = server.active_operations - 1  # 이 요청 말고 진행 중인 작업(적용 등)
-    if others > 0:
-        raise ModError("다른 작업이 진행 중이에요. 끝난 뒤 다시 시도해 주세요.")
-    release = updater.fetch_latest()
-    if not updater.is_newer(release.version):
-        raise ModError("이미 최신 버전이에요.")
-    problem = updater.install_problem(release)
-    if problem:
-        raise ModError(problem)
-    exe = updater.current_exe()
-    new_file = updater.download(release, exe)
-    updater.schedule_swap(exe, new_file)
+        if server.updating:
+            raise ModError("이미 업데이트하는 중이에요.")
+        if server.active_operations > 1:  # 이 요청 말고 진행 중인 작업(적용 등)
+            raise ModError("다른 작업이 진행 중이에요. 끝난 뒤 다시 시도해 주세요.")
+        server.updating = True  # 여기서부터 다른 변경 작업은 받지 않는다
+    scheduled = False
+    try:
+        release = updater.fetch_latest()
+        if not updater.is_newer(release.version):
+            raise ModError("이미 최신 버전이에요.")
+        problem = updater.install_problem(release)
+        if problem:
+            raise ModError(problem)
+        exe = updater.current_exe()
+        new_file = updater.download(release, exe)
+        if server.stopping:  # 받는 동안 창을 닫았으면 업데이트하지 않는다
+            new_file.unlink(missing_ok=True)
+            raise ModError("창을 닫아서 업데이트를 취소했어요.")
+        updater.schedule_swap(exe, new_file)
+        scheduled = True
+    finally:
+        if not scheduled:
+            with server.client_lock:
+                server.updating = False
     log.info("업데이트 준비 완료: %s -> %s", __version__, release.version)
     threading.Timer(1.0, server.request_exit).start()  # 응답을 보낸 뒤 끝낸다
     return {"restarting": True, "version": release.version}

@@ -679,10 +679,12 @@ async function launchGame() {
 // ------------------------------------------------------------ 앱 업데이트
 let updateInfo = null;
 let restarting = false;
+let restartOverlay = null;
 
 async function checkForUpdate({ manual = false } = {}) {
   try {
-    updateInfo = await api(`/api/update${manual ? '?force=1' : ''}`);
+    // 직접 누른 확인은 기억해 둔 결과 없이 새로 묻는다 (토큰이 필요한 POST)
+    updateInfo = manual ? await api('/api/update/check', { body: {} }) : await api('/api/update');
   } catch (e) {
     if (manual) toast('err', e.message);  // 켤 때 자동 확인이 실패하면 조용히 넘어간다
     return;
@@ -726,14 +728,20 @@ async function installUpdate() {
     const r = await api('/api/update/install', { body: {} });
     restarting = true;
     progress.close();
-    document.body.append(h('div', { class: 'disconnected' }, h('div', null,
+    restartOverlay = h('div', { class: 'disconnected' }, h('div', null,
       h('strong', null, `v${r.version}(으)로 다시 켜는 중이에요`),
-      h('span', { class: 'muted' }, '창이 닫혔다가 새 버전으로 다시 열려요. 잠시만 기다려 주세요.'))));
+      h('span', { class: 'muted' }, '창이 닫혔다가 새 버전으로 다시 열려요. 잠시만 기다려 주세요.')));
+    document.body.append(restartOverlay);
   } catch (e) {
     progress.close();
     busy = null;
     render();
-    toast('err', e.message);
+    const open = await openModal({
+      title: '자동 업데이트를 하지 못했어요',
+      body: [h('p', null, e.message), h('p', { class: 'muted' }, '릴리즈 페이지에서 새 Modocracy.exe를 직접 받아 바꿔 넣어도 돼요.')],
+      actions: [{ label: '닫기', value: false }, { label: '릴리즈 페이지 열기', kind: 'primary', value: true }],
+    });
+    if (open) openFolder('release');
   }
 }
 
@@ -966,7 +974,13 @@ function watchConnection() {
     if (lostTimer || overlay) return;
     lostTimer = setTimeout(() => {
       lostTimer = null;
-      if (restarting) return;
+      if (restarting) {
+        // Edge 창으로 열었을 때는 이 창이 저절로 닫히지 않는다: 새 창이 따로 열린다고 알려 준다
+        restartOverlay?.replaceChildren(h('div', null,
+          h('strong', null, '업데이트를 마치면 새 창이 열려요'),
+          h('span', { class: 'muted' }, '이 창은 닫아도 돼요.')));
+        return;
+      }
       overlay = h('div', { class: 'disconnected' }, h('div', null,
         h('strong', null, '모드 매니저가 종료되었어요'),
         h('span', { class: 'muted' }, '이 창을 닫고 모드 매니저를 다시 실행해 주세요.')));

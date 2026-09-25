@@ -5,9 +5,13 @@ import base64
 import hashlib
 import io
 import json
+import os
 import shutil
+import subprocess
+import sys
 import tempfile
 import threading
+import time
 import unittest
 import urllib.request
 from pathlib import Path
@@ -95,10 +99,17 @@ class UpdaterTests(unittest.TestCase):
         command = popen.call_args.args[0]
         self.assertEqual(command[0], "powershell.exe")
         script = base64.b64decode(command[-1]).decode("utf-16-le")
-        self.assertIn(f"Wait-Process -Id {__import__('os').getpid()}", script)
+        self.assertIn(f"Get-Process -Id {os.getpid()}", script)
+        self.assertIn("$ErrorActionPreference = 'Stop'", script)  # 파일 작업이 실패하면 catch로 넘어가야 되돌릴 수 있다
         self.assertIn(str(folder).replace("'", "''") + "\\Modocracy.old.exe", script)
-        self.assertIn("Start-Process -FilePath $exe", script)
         self.assertIn("Move-Item -LiteralPath $old -Destination $exe", script)  # 실패하면 되돌림
+
+    def test_restart_keeps_launch_options(self):
+        with mock.patch.object(updater, "RESTART_ARGS", ["--data-dir", "D:\\My Mods", "--browser"]), \
+                mock.patch("hd2mm.updater.subprocess.Popen") as popen:
+            updater.schedule_swap(self.exe, self.tmp / "Modocracy.exe.download")
+        script = base64.b64decode(popen.call_args.args[0][-1]).decode("utf-16-le")
+        self.assertIn("$arguments = '--data-dir \"D:\\My Mods\" --browser'", script)
 
     def test_swap_job_gets_clean_environment(self):
         fake_env = {"PATH": "C:\\Temp\\_MEI123;C:\\Windows", "_PYI_APPLICATION_HOME_DIR": "C:\\Temp\\_MEI123",
@@ -171,6 +182,56 @@ class UpdateServerTests(unittest.TestCase):
             swap.assert_called_once_with(self.exe, self.tmp / "Modocracy.exe.download")
             self.assertTrue(exited.wait(5))
 
+    def test_manual_check_asks_again(self):
+        with mock.patch.object(updater, "fetch_latest", return_value=updater.Release("9.9.9", "u", "n", None, 0, None)) as fetch:
+            self.call("/api/update")
+            self.call("/api/update?force=1")  # GET으로는 다시 묻지 않는다 (아무 웹페이지나 부를 수 있으므로)
+            self.assertEqual(fetch.call_count, 1)
+            status, _ = self.call("/api/update/check", body={})
+            self.assertEqual(status, 200)
+            self.assertEqual(fetch.call_count, 2)
+
+    def test_after_install_other_changes_are_refused(self):
+        release = updater.Release("9.9.9", "u", "n", updater.DOWNLOAD_PREFIX + "v9.9.9/Modocracy.exe", len(NEW_EXE), DIGEST)
+        self.server.on_exit = lambda: None
+        with mock.patch.object(updater, "fetch_latest", return_value=release), \
+                mock.patch.object(updater, "current_exe", return_value=self.exe), \
+                mock.patch("hd2mm.updater.urllib.request.urlopen", side_effect=fake_urlopen({}, NEW_EXE)), \
+                mock.patch.object(updater, "schedule_swap") as swap:
+            self.assertEqual(self.call("/api/update/install", body={})[0], 200)
+            status, result = self.call("/api/update/install", body={})
+            self.assertEqual(status, 503)
+            self.assertIn("업데이트하는 중", result["error"])
+            self.assertEqual(self.call("/api/order", body={"ids": []})[0], 503)
+        swap.assert_called_once()
+
+    def test_closing_window_during_download_cancels_update(self):
+        release = updater.Release("9.9.9", "u", "n", updater.DOWNLOAD_PREFIX + "v9.9.9/Modocracy.exe", len(NEW_EXE), DIGEST)
+        downloaded = self.tmp / "Modocracy.exe.download"
+
+        def download(rel, exe):
+            downloaded.write_bytes(NEW_EXE)
+            self.server.stopping = True  # 받는 동안 사용자가 창을 닫음
+            return downloaded
+
+        with mock.patch.object(updater, "fetch_latest", return_value=release), \
+                mock.patch.object(updater, "current_exe", return_value=self.exe), \
+                mock.patch.object(updater, "download", side_effect=download), \
+                mock.patch.object(updater, "schedule_swap") as swap:
+            status, result = self.call("/api/update/install", body={})
+        self.assertEqual(status, 400)
+        self.assertIn("취소", result["error"])
+        swap.assert_not_called()
+        self.assertFalse(downloaded.exists())
+        self.assertFalse(self.server.updating)
+
+    def test_ready_hook_runs_once_after_first_state(self):
+        calls = []
+        self.server.on_ready = lambda: calls.append(1)
+        self.call("/api/state")
+        self.call("/api/state")
+        self.assertEqual(calls, [1])
+
     def test_install_refused_when_running_from_source(self):
         release = updater.Release("9.9.9", "u", "n", updater.DOWNLOAD_PREFIX + "x", 1, "ab")
         with mock.patch.object(updater, "fetch_latest", return_value=release):
@@ -193,6 +254,69 @@ class UpdateServerTests(unittest.TestCase):
         _, state = self.call("/api/state")
         self.assertFalse(state["checkUpdates"])
         self.assertFalse(Library(self.tmp / "data").settings["checkUpdates"])
+
+
+@unittest.skipUnless(sys.platform == "win32", "Windows 전용 (PowerShell)")
+class SwapScriptTests(unittest.TestCase):
+    """교체 작업(PowerShell)을 실제로 돌려 본다. 창 없이 바로 끝나는 rundll32.exe를 가짜 앱으로 쓴다."""
+
+    def setUp(self):
+        base = Path(tempfile.mkdtemp(prefix="hd2mm-swap-"))
+        self.addCleanup(shutil.rmtree, base, True)
+        self.dir = base / "it's 모드 폴더"  # 빈칸·작은따옴표·한글이 든 경로
+        self.dir.mkdir()
+        self.exe = self.dir / "Modocracy.exe"
+        self.new = self.dir / "Modocracy.exe.download"
+        self.old = self.dir / "Modocracy.old.exe"
+        stub = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "rundll32.exe"
+        self.old_bytes = stub.read_bytes()
+        self.new_bytes = self.old_bytes + b"new-version"  # 뒤에 덧붙여도 실행은 된다
+        self.exe.write_bytes(self.old_bytes)
+        self.new.write_bytes(self.new_bytes)
+
+    def finished_pid(self) -> int:
+        proc = subprocess.Popen(["cmd.exe", "/c", "exit 0"], creationflags=updater.CREATE_NO_WINDOW)
+        proc.wait()
+        return proc.pid
+
+    def run_script(self, pid, wait=3, verify=4, retries=100, new_version_starts=False):
+        script = updater.build_swap_script(self.exe, self.new, pid, wait_seconds=wait, verify_seconds=verify, retries=retries)
+        proc = subprocess.Popen(updater.powershell_command(script), creationflags=updater.CREATE_NO_WINDOW)
+        if new_version_starts:  # 새 버전이 화면까지 떴을 때처럼 .old.exe를 지운다
+            deadline = time.monotonic() + 20
+            while time.monotonic() < deadline:
+                try:
+                    if self.old.exists() and self.exe.read_bytes() == self.new_bytes:
+                        self.old.unlink()
+                        break
+                except OSError:
+                    pass
+                time.sleep(0.02)
+        return proc.wait(timeout=90)
+
+    def test_swaps_after_exit_and_keeps_new_version(self):
+        self.assertEqual(self.run_script(self.finished_pid(), new_version_starts=True), 0)
+        self.assertEqual(self.exe.read_bytes(), self.new_bytes)
+        self.assertFalse(self.new.exists())
+        self.assertFalse(self.old.exists())
+
+    def test_rolls_back_when_new_version_quits_at_start(self):
+        self.assertEqual(self.run_script(self.finished_pid()), 3)
+        self.assertEqual(self.exe.read_bytes(), self.old_bytes)
+        self.assertFalse(self.old.exists())
+        self.assertFalse((self.dir / "Modocracy.failed.exe").exists())
+
+    def test_does_nothing_while_app_is_still_running(self):
+        self.assertEqual(self.run_script(os.getpid(), wait=2), 1)
+        self.assertEqual(self.exe.read_bytes(), self.old_bytes)
+        self.assertTrue(self.new.exists())
+        self.assertFalse(self.old.exists())
+
+    def test_failed_swap_restores_old_exe(self):
+        self.new.unlink()  # 새 파일을 옮길 수 없는 상황
+        self.assertEqual(self.run_script(self.finished_pid(), retries=3), 2)
+        self.assertEqual(self.exe.read_bytes(), self.old_bytes)
+        self.assertFalse(self.old.exists())
 
 
 if __name__ == "__main__":
