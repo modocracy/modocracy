@@ -130,6 +130,18 @@ def load_webview():
     return webview
 
 
+def disable_webview_gpu() -> None:
+    """WebView2가 그래픽카드(GPU) 대신 소프트웨어로 화면을 그리게 한다.
+
+    그래픽 드라이버·오버레이(Afterburner, Discord 등)와 맞지 않는 PC에서 GPU로 그리면
+    화면 일부(글자, 박스)만 나오거나 검은 화면이 랜덤으로 나온다. 화면이 단순해 속도 차이는 거의 없다.
+    """
+    name = "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"
+    args = os.environ.get(name, "").split()
+    if "--disable-gpu" not in args:
+        os.environ[name] = " ".join([*args, "--disable-gpu"])
+
+
 def run_app_window(webview, server: AppServer, url: str) -> bool:
     """전용 창을 띄우고 닫힐 때까지 기다린다 (서버는 뒤에서 돈다).
 
@@ -163,6 +175,7 @@ def run_app_window(webview, server: AppServer, url: str) -> bool:
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     icon = icon_path()
+    disable_webview_gpu()
     try:
         webview.start(gui="edgechromium", icon=str(icon) if icon else None)
     except Exception:  # noqa: BLE001 - 창 부품 오류는 기록하고 아래에서 처리
