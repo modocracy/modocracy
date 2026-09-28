@@ -130,16 +130,75 @@ def load_webview():
     return webview
 
 
+GPU_OFF_FLAG = "--disable-gpu"
+BROWSER_ARGS_ENV = "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"
+
+
+def with_flag(args: str | None, flag: str) -> str:
+    """옵션 문자열 뒤에 flag를 덧붙인다. 기존 내용은 그대로 두고, 이미 있으면 붙이지 않는다."""
+    args = args or ""
+    if flag in args.split():
+        return args
+    return f"{args} {flag}" if args.strip() else flag
+
+
+def load_edge_chrome():
+    """전용 창에서 WebView2를 만드는 pywebview 모듈."""
+    from webview.platforms import edgechromium
+
+    return edgechromium
+
+
 def disable_webview_gpu() -> None:
-    """WebView2가 그래픽카드(GPU) 대신 소프트웨어로 화면을 그리게 한다.
+    """WebView2가 그래픽카드(GPU) 대신 CPU로 화면을 그리게 한다.
 
     그래픽 드라이버·오버레이(Afterburner, Discord 등)와 맞지 않는 PC에서 GPU로 그리면
-    화면 일부(글자, 박스)만 나오거나 검은 화면이 랜덤으로 나온다. 화면이 단순해 속도 차이는 거의 없다.
+    화면 일부(글자, 박스)만 나오거나 검은 화면이 랜덤으로 나온다.
+    옵션은 두 곳에 넣는다: 환경 변수(관리자 권한 실행이면 WebView2가 무시한다)와 코드(관리자여도 적용된다).
     """
-    name = "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"
-    args = os.environ.get(name, "").split()
-    if "--disable-gpu" not in args:
-        os.environ[name] = " ".join([*args, "--disable-gpu"])
+    os.environ[BROWSER_ARGS_ENV] = with_flag(os.environ.get(BROWSER_ARGS_ENV), GPU_OFF_FLAG)
+    try:
+        module = load_edge_chrome()
+    except Exception:  # noqa: BLE001 - 창 부품을 못 읽으면 pywebview도 창을 못 띄워 Edge 창으로 넘어간다
+        log.exception("WebView2 부품을 읽지 못해 GPU 끄기를 환경 변수로만 넣습니다.")
+        return
+    patch_edge_chrome(module)
+
+
+def patch_edge_chrome(module) -> None:
+    """pywebview가 WebView2 옵션을 정한 뒤, WebView2를 켜기 전에 GPU 끄기 옵션을 덧붙인다.
+
+    pywebview(6.2)는 옵션을 정한 WebView2를 창에 붙이고(Controls.Add) 나서 켠다(EnsureCoreWebView2Async).
+    pywebview에 옵션을 넣는 공식 설정이 없어서, 그 사이에 오는 '창에 부품이 붙음'(ControlAdded) 신호에서 고친다.
+    """
+    original = module.EdgeChrome
+    if getattr(original, "gpu_off", False):
+        return
+
+    class EdgeChrome(original):
+        gpu_off = True
+
+        def __init__(self, form, *args, **kwargs):
+            done = []
+
+            def on_control_added(sender, event):
+                try:
+                    props = getattr(getattr(self, "webview", None), "CreationProperties", None)
+                    if props is not None and not done:
+                        props.AdditionalBrowserArguments = with_flag(props.AdditionalBrowserArguments, GPU_OFF_FLAG)
+                        done.append(True)
+                except Exception:  # noqa: BLE001 - 창 만들기를 방해하지 않도록 기록만 한다
+                    log.exception("WebView2 옵션 수정 실패")
+
+            form.ControlAdded += on_control_added
+            try:
+                super().__init__(form, *args, **kwargs)
+            finally:
+                form.ControlAdded -= on_control_added
+            if not done:
+                log.warning("WebView2에 GPU 끄기를 코드로 넣지 못했어요. 관리자 권한으로 실행하면 적용되지 않을 수 있어요.")
+
+    module.EdgeChrome = EdgeChrome
 
 
 def run_app_window(webview, server: AppServer, url: str) -> bool:
