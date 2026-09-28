@@ -408,6 +408,7 @@ class AppWindowTests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="hd2mm-win-"))
         self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.enterContext(mock.patch.dict(os.environ))  # 창을 띄우며 바꾼 환경 변수를 테스트가 끝나면 되돌린다
         self.server = AppServer(("127.0.0.1", 0), Library(self.tmp / "data"), web_dir(), auto_exit=False)
         self.addCleanup(self.server.server_close)
         self.base = f"http://127.0.0.1:{self.server.port}/"
@@ -478,13 +479,13 @@ class AppWindowTests(unittest.TestCase):
 
     def test_window_draws_without_gpu(self):
         name = "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"
-        with mock.patch.dict(os.environ, {name: "--lang=ko"}):
-            seen = {}
-            fake = FakeWebview(while_open=lambda: seen.setdefault("args", os.environ[name]))
-            self.assertTrue(app.run_app_window(fake, self.server, self.base))
-            self.assertEqual(seen["args"], "--lang=ko --disable-gpu")  # 창을 띄울 때 이미 들어가 있다
-            app.disable_webview_gpu()
-            self.assertEqual(os.environ[name], "--lang=ko --disable-gpu")  # 두 번 붙이지 않는다
+        os.environ[name] = "--lang=ko"
+        seen = {}
+        fake = FakeWebview(while_open=lambda: seen.setdefault("args", os.environ[name]))
+        self.assertTrue(app.run_app_window(fake, self.server, self.base))
+        self.assertEqual(seen["args"], "--lang=ko --disable-gpu")  # 창을 띄울 때 이미 들어가 있다
+        app.disable_webview_gpu()
+        self.assertEqual(os.environ[name], "--lang=ko --disable-gpu")  # 두 번 붙이지 않는다
 
     def test_no_webview_without_webview2(self):
         with mock.patch.object(gameinfo, "has_webview2", return_value=False):
