@@ -511,6 +511,8 @@ class Style(QProxyStyle):
             on = bool(state & QStyle.StateFlag.State_On)
             enabled = bool(state & QStyle.StateFlag.State_Enabled)
             hover = bool(state & QStyle.StateFlag.State_MouseOver)
+            # Tab으로 옮겨 왔을 때만 포커스를 굵은 노란 테두리로 보여 준다
+            focus = bool(state & QStyle.StateFlag.State_HasFocus) and bool(state & QStyle.StateFlag.State_KeyboardFocusChange)
             rect = QRectF(option.rect).adjusted(1, 1, -1, -1)
             size = min(rect.width(), rect.height())
             rect = QRectF(rect.center().x() - size / 2, rect.center().y() - size / 2, size, size)
@@ -518,8 +520,8 @@ class Style(QProxyStyle):
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
             if not enabled:
                 painter.setOpacity(0.45)
-            border = QColor(C["accent"]) if on or hover else QColor(C["line2"])
-            painter.setPen(QPen(border, 1.2))
+            border = QColor(C["accent"]) if on or hover or focus else QColor(C["line2"])
+            painter.setPen(QPen(border, 2.4 if focus else 1.2))
             painter.setBrush(QColor(C["accent"] if on and element == pe.PE_IndicatorCheckBox else C["bg2"]))
             if element == pe.PE_IndicatorCheckBox:
                 painter.drawRoundedRect(rect, 4, 4)
@@ -566,8 +568,8 @@ class Switch(QCheckBox):
 
     def sizeHint(self):
         metrics = QFontMetrics(self.font())
-        width = 36 + (12 + metrics.horizontalAdvance(self.text()) if self.text() else 0)
-        return QSize(width + 2, max(22, metrics.height() + 4))
+        width = 42 + (12 + metrics.horizontalAdvance(self.text()) if self.text() else 0)
+        return QSize(width + 2, max(26, metrics.height() + 4))
 
     def minimumSizeHint(self):
         return self.sizeHint()
@@ -579,11 +581,15 @@ class Switch(QCheckBox):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         top = (self.height() - 20) / 2
-        draw_switch(painter, QRectF(0, top, 36, 20), self.isChecked(), self.isEnabled())
+        draw_switch(painter, QRectF(3, top, 36, 20), self.isChecked(), self.isEnabled())
+        if self.hasFocus() and self.window().testAttribute(Qt.WidgetAttribute.WA_KeyboardFocusChange):
+            painter.setPen(QPen(QColor(C["accent"]), 1.5))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(QRectF(0.75, top - 2.25, 40.5, 24.5), 12.25, 12.25)
         if self.text():
             painter.setPen(QColor(C["text"] if self.isEnabled() else C["faint"]))
             painter.setFont(self.font())
-            painter.drawText(QRect(48, 0, self.width() - 48, self.height()),
+            painter.drawText(QRect(54, 0, self.width() - 54, self.height()),
                              Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, self.text())
         painter.end()
 
@@ -660,6 +666,10 @@ class ModDelegate(QStyledItemDelegate):
             painter.setBrush(QColor(C["bg2"]))
             painter.setPen(QPen(QColor(C["line2"] if hover else C["bg2"]), 1))
         painter.drawRoundedRect(box, 7, 7)
+        if state & QStyle.StateFlag.State_HasFocus and state & QStyle.StateFlag.State_KeyboardFocusChange:
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(QColor(C["accent"]), 2))
+            painter.drawRoundedRect(box.adjusted(1, 1, -1, -1), 6, 6)
         painter.drawPixmap(grip, icon_pixmap("grip", C["faint"], 16))
         draw_switch(painter, QRectF(switch), on, enabled)
         painter.setOpacity(1.0 if on else 0.5)
@@ -713,23 +723,33 @@ class ModDelegate(QStyledItemDelegate):
                                                  C["err"] if worst == "error" else C["warn"], 18))
         painter.restore()
 
+    @staticmethod
+    def _toggle(model, index):
+        on = Qt.CheckState(index.data(Qt.ItemDataRole.CheckStateRole)) == Qt.CheckState.Checked
+        model.setData(index, Qt.CheckState.Unchecked if on else Qt.CheckState.Checked, Qt.ItemDataRole.CheckStateRole)
+
     def editorEvent(self, event, model, option, index):
         kind = event.type()
+        if kind == QEvent.Type.KeyPress and event.key() in (Qt.Key.Key_Space, Qt.Key.Key_Select):
+            if index.isValid() and not self.window.blocked:
+                self._toggle(model, index)  # 선택한 모드를 스페이스바로 켜고 끈다
+            return True
         if kind in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonRelease, QEvent.Type.MouseButtonDblClick):
             switch = self.parts(option.rect)[2].adjusted(-6, -10, 6, 10)
             if event.button() == Qt.MouseButton.LeftButton and switch.contains(event.position().toPoint()):
                 if kind == QEvent.Type.MouseButtonRelease and not self.window.blocked:
-                    on = Qt.CheckState(index.data(Qt.ItemDataRole.CheckStateRole)) == Qt.CheckState.Checked
-                    model.setData(index, Qt.CheckState.Unchecked if on else Qt.CheckState.Checked,
-                                  Qt.ItemDataRole.CheckStateRole)
+                    self._toggle(model, index)
                 return True  # 스위치를 누르면 선택·끌기를 시작하지 않는다
         return False
 
     def helpEvent(self, event, view, option, index):
+        from PySide6.QtWidgets import QToolTip
+        if not index.isValid():  # 목록의 빈 곳
+            QToolTip.hideText()
+            return False
         switch = self.parts(option.rect)[2]
         mod = index.data(MOD_ROLE) or {}
         on = Qt.CheckState(index.data(Qt.ItemDataRole.CheckStateRole)) == Qt.CheckState.Checked
-        from PySide6.QtWidgets import QToolTip
         text = tr("switch.on_title" if on else "switch.off_title") if switch.contains(event.pos()) \
             else mod.get("name", "") + "\n" + tr("mod.drag")
         QToolTip.showText(event.globalPos(), text, view)
@@ -928,7 +948,10 @@ class MainWindow(QMainWindow):
         self.selected_id = None
         self.busy = False
         self.quiet_task = False
-        self._pending = []
+        self._pending = []  # 조용한 작업 중에 받은 작업. 끝나는 대로 순서대로 실행한다
+        self.close_requested = False  # 받은 작업을 모두 마친 뒤 닫는다
+        self._list_mods = None  # 목록을 마지막으로 그린 모드 정보 (같으면 다시 만들지 않는다)
+        self._detail_key = None  # 상세 화면을 마지막으로 그린 모드 정보
         self.closing = False
         self.restarting = False
         self.rendered = False
@@ -1006,6 +1029,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(root)
         self.overlay = DropOverlay(root)
         self.overlay.dropped.connect(self.import_paths)
+        self._list_mods = None
         self.render_detail()
         self.render_update()
         self.set_busy(self.busy)
@@ -1240,13 +1264,18 @@ class MainWindow(QMainWindow):
                     failure(exc)
                 else:
                     self.show_error(exc)
-        if self.closing:
-            self._pending.clear()
-            QTimer.singleShot(0, self.close)
-        elif not self.busy:
+        if self.restarting:
+            self._pending.clear()  # 새 버전으로 다시 켜는 중에는 새 작업을 하지 않는다
+        if not self.busy:
             self.set_busy(False)
-            if self._pending:
-                QTimer.singleShot(0, self._pending.pop(0))
+        self._drain_pending()
+
+    def _drain_pending(self):
+        """받아 둔 작업을 곧바로 이어서 시작한다 (타이머로 미루면 그 틈에 다른 작업이 끼어들어 사라질 수 있다)."""
+        while self._pending and not self.busy and not self.closing and not self.restarting:
+            self._pending.pop(0)()
+        if self.close_requested and not self.busy and not self._pending:
+            QTimer.singleShot(0, self.close)
 
     def show_error(self, exc):
         QMessageBox.warning(self, APP_NAME, str(exc) if isinstance(exc, ModError) else i18n.t("err.unknown"))
@@ -1261,7 +1290,8 @@ class MainWindow(QMainWindow):
         self.run_task(self.backend.state, self.apply_state, failure=failed, quiet=quiet)
 
     def refresh_if_idle(self):
-        if not self.busy and self.isVisible() and QApplication.activeModalWidget() is None:
+        if (not self.busy and not self.close_requested and self.isVisible()
+                and QApplication.activeModalWidget() is None):
             self.refresh(quiet=True)
 
     def apply_state(self, state):
@@ -1307,7 +1337,12 @@ class MainWindow(QMainWindow):
         for text, role in lines:
             self.status_lines.addWidget(label(text, role, font=make_font(9.5)))
 
-    def render_state(self):
+    def render_state(self, force=False):
+        """상태 카드는 늘 새로 쓰고, 목록·상세는 모드 정보가 바뀌었을 때만 다시 만든다.
+
+        게임 실행 여부처럼 모드와 상관없는 변화로 펼쳐 둔 선택 상자나 포커스가 사라지지 않게 한다.
+        force는 누른 스위치 모양을 실제 상태로 되돌려야 할 때(작업 실패·거절) 쓴다.
+        """
         state, game, status = self.state, self.state["game"], self.state["status"]
         # 게임 칩
         if game["problem"]:
@@ -1340,6 +1375,12 @@ class MainWindow(QMainWindow):
         if self.selected_id not in ids:
             self.selected_id = ids[0] if ids else None
         self.count_label.setText(f"{sum(m['enabled'] for m in mods)}/{len(mods)}" if mods else "")
+        if force or mods != self._list_mods:
+            self._rebuild_list(mods)
+        self.render_detail(force=force)
+
+    def _rebuild_list(self, mods):
+        self._list_mods = mods
         scroll = self.mod_list.verticalScrollBar().value()
         self.mod_list.blockSignals(True)
         self.mod_list.clear()
@@ -1357,7 +1398,6 @@ class MainWindow(QMainWindow):
         self.mod_list.setVisible(bool(mods))
         self._set_edges_visible(bool(mods))
         self.empty_button.setVisible(not mods)
-        self.render_detail()
 
     def selected_mod(self):
         return next((m for m in (self.state or {}).get("mods", []) if m["id"] == self.selected_id), None)
@@ -1370,12 +1410,27 @@ class MainWindow(QMainWindow):
         self.change_mod(item.data(USER_ROLE), {"enabled": item.checkState() == Qt.CheckState.Checked})
 
     def command(self, path, body=None, success=None, failure=None, message=""):
+        """백엔드에 변경을 보낸다. body가 함수면 보내는 순간의 최신 상태로 내용을 만든다.
+
+        조용한 새로고침 중에 받은 변경은 대기열에 넣었다가 실행한다. 그때 옛 화면 기준으로
+        만든 내용을 보내면 앞선 변경을 덮어쓰므로(예: 옵션 A를 끈 뒤 B를 끄면 A가 다시 켜짐) 늦게 계산한다.
+        """
+        if self.busy and self.quiet_task and not self.closing and not self.restarting:
+            self._pending.append(lambda: self.command(path, body, success, failure, message))
+            return True
+        payload = body() if callable(body) else body
+        if callable(body) and payload is None:
+            return False  # 그사이 모드가 사라지는 등 보낼 것이 없다
+
         def failed(exc):
             if self.state:
-                self.render_state()
+                self.render_state(force=True)
             (failure or self.show_error)(exc)
-        return self.run_task(lambda: self.backend.command(path, body), success, refresh=True,
-                             failure=failed, message=message)
+        started = self.run_task(lambda: self.backend.command(path, payload), success, refresh=True,
+                                failure=failed, message=message)
+        if not started and self.state:
+            self.render_state(force=True)  # 누른 스위치 모양을 실제 상태로 되돌린다
+        return started
 
     def change_mod(self, mod_id, changes):
         self.command(f"/api/mods/{mod_id}", changes)
@@ -1384,11 +1439,15 @@ class MainWindow(QMainWindow):
         self.command("/api/order", {"ids": ids})
 
     def move_mod(self, mod_id, offset):
-        ids = [m["id"] for m in self.state["mods"]]
-        pos = ids.index(mod_id)
-        ids.remove(mod_id)
-        ids.insert(len(ids) if offset is None else max(0, min(len(ids), pos + offset)), mod_id)
-        self.reorder(ids)
+        def body():
+            ids = [m["id"] for m in (self.state or {}).get("mods", [])]
+            if mod_id not in ids:
+                return None
+            pos = ids.index(mod_id)
+            ids.remove(mod_id)
+            ids.insert(len(ids) if offset is None else max(0, min(len(ids), pos + offset)), mod_id)
+            return {"ids": ids}
+        self.command("/api/order", body)
 
     # ---- 그림
     def mod_pixmap(self, mod, url, size):
@@ -1425,7 +1484,13 @@ class MainWindow(QMainWindow):
         return pixmap
 
     # ---- 상세 화면
-    def render_detail(self, reset_scroll=False):
+    def render_detail(self, reset_scroll=False, force=True):
+        mods = (self.state or {}).get("mods", [])
+        current = self.selected_mod()
+        key = (self.selected_id, current, mods.index(current) if current else -1, len(mods), self.current_lang)
+        if not force and key == self._detail_key:
+            return
+        self._detail_key = key
         scroll = 0 if reset_scroll else self.detail_scroll.verticalScrollBar().value()
         panel = QWidget()
         panel.setObjectName("transparent")
@@ -1459,7 +1524,7 @@ class MainWindow(QMainWindow):
                 section.addWidget(section_label(tr("detail.description")))
                 section.addWidget(label(mod["description"], "desc", font=make_font(10)))
                 body.addLayout(section)
-            self.render_options(body, mod)
+            self.render_options(body, mod, panel)
             if not mod["error"]:
                 body.addWidget(self._files(mod))
             if mod.get("hasReadme"):
@@ -1534,13 +1599,13 @@ class MainWindow(QMainWindow):
             layout.addWidget(box)
         return layout
 
-    def render_options(self, layout, mod):
+    def render_options(self, layout, mod, owner=None):
         if mod["error"] or not mod.get("options") or mod.get("mode") == "fixed":
             return
         section = QVBoxLayout()
         section.setSpacing(8)
         section.addWidget(section_label(tr("detail.choose_one" if mod["mode"] == "single" else "detail.options")))
-        group = QButtonGroup(self.detail_scroll)
+        group = QButtonGroup(owner if owner is not None else self.detail_scroll)  # 상세 화면과 함께 지워진다
         # 생성 중 선택 신호는 연결하지 않고, 사용자 입력만 백엔드로 보낸다.
         for index, option in enumerate(mod["options"]):
             if mod["mode"] == "single":
@@ -1676,9 +1741,16 @@ class MainWindow(QMainWindow):
         return section
 
     def change_array(self, mod, key, index, value):
-        values = list(mod["state"][key])
-        values[index] = value
-        self.change_mod(mod["id"], {key: values})
+        mod_id = mod["id"]
+
+        def body():
+            current = next((m for m in (self.state or {}).get("mods", []) if m["id"] == mod_id), None)
+            values = list(((current or {}).get("state") or {}).get(key) or [])
+            if index >= len(values):
+                return None
+            values[index] = value
+            return {key: values}
+        self.command(f"/api/mods/{mod_id}", body)
 
     # ---- 대화 상자
     def choose(self, title, text, actions, *, danger=False):
@@ -1908,15 +1980,11 @@ class MainWindow(QMainWindow):
         event.acceptProposedAction()
 
     def closeEvent(self, event):
-        if self.blocked:
-            self.closing = True
+        if self.busy or (self._pending and not self.restarting):
+            # 진행 중인 작업과 받아 둔 변경(저장)을 모두 마친 뒤 닫는다
+            self.close_requested = True
             self.centralWidget().setEnabled(False)
             self.statusBar().showMessage(tr("native.wait_close"))
-            event.ignore()
-            return
-        if self.busy:
-            # 조용한 새로고침·업데이트 확인은 끝나길 기다렸다가 바로 닫는다
-            self.closing = True
             event.ignore()
             return
         # 개발용 웹 API에서 시작한 작업도 중간에 끊지 않는다.

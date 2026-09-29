@@ -89,26 +89,76 @@ def migrate_legacy_data(data_dir: Path) -> bool:
     return True
 
 
+def home_aliases() -> list[str]:
+    """사용자 폴더의 여러 표기: Path.home(), USERPROFILE, 8.3 짧은 경로(C:\\Users\\JANEDO~1).
+
+    짧은 경로는 TEMP 환경 변수에 흔히 들어 있어서, exe가 풀리는 임시 폴더 경로가 이 모양으로 기록된다.
+    """
+    homes = {str(Path.home()), os.environ.get("USERPROFILE", "")}
+    if sys.platform == "win32":
+        import ctypes
+
+        for home in [h for h in homes if h]:
+            buffer = ctypes.create_unicode_buffer(1024)
+            if ctypes.windll.kernel32.GetShortPathNameW(home, buffer, len(buffer)):
+                homes.add(buffer.value)
+    return sorted({h.rstrip("\\/") for h in homes if h.strip("\\/")})
+
+
+def sibling_folders(homes: list[str]) -> list[str]:
+    """이름이 사용자 폴더 이름으로 시작하는 다른 폴더 (예: C:\\Users\\Jane Doe Smith). 이런 폴더는 가리지 않는다."""
+    names = set()
+    for home in homes:
+        path = Path(home)
+        try:
+            names.update(p.name for p in path.parent.iterdir()
+                         if p.name.lower().startswith(path.name.lower()) and p.name.lower() != path.name.lower())
+        except OSError:
+            pass
+    return sorted(names)
+
+
 class PrivacyFormatter(logging.Formatter):
     """로그에 쓰기 전에 사용자 폴더(C:\\Users\\이름)를 %USERPROFILE%로 가린다.
 
     제보할 때 로그를 공개된 곳에 붙여 넣어도 Windows 사용자 이름이 드러나지 않게 한다.
-    오류 상세(traceback)와 dict를 그대로 찍어 \\가 두 번 나오는 경로도 함께 가린다.
+    오류 상세(traceback), dict를 그대로 찍어 \\가 두 번 나오는 경로, 8.3 짧은 경로도 함께 가린다.
     """
 
-    def __init__(self, fmt: str, home: str | Path | None = None):
+    END = r"(?=$|[\\/'\"\s,;:)\]}])"  # 경로 구분자·따옴표·공백·괄호 앞에서 끝나야 폴더 이름 전체다
+
+    def __init__(self, fmt: str, homes: list[str] | None = None, siblings: list[str] | None = None):
         super().__init__(fmt)
-        home = str(home if home is not None else Path.home()).rstrip("\\/")
-        variants = {home, home.replace("\\", "/"), home.replace("\\", "\\\\")} if home else set()
-        # C:\Users\Jane 은 가리고 C:\Users\Janet 은 건드리지 않는다
+        homes = [str(h).rstrip("\\/") for h in (homes if homes is not None else home_aliases()) if str(h).strip("\\/")]
+        siblings = siblings if siblings is not None else sibling_folders(homes)
+        variants = {v for h in homes for v in (h, h.replace("\\", "/"), h.replace("\\", "\\\\"))}
+        # C:\\Users\\Jane 옆에 C:\\Users\\Jane Doe 폴더가 따로 있으면 그 폴더는 가리지 않는다
+        suffixes = {name[len(Path(h).name):] for h in homes for name in siblings
+                    if name.lower().startswith(Path(h).name.lower()) and len(name) > len(Path(h).name)}
+        exclude = ("(?!(?:" + "|".join(re.escape(x) for x in sorted(suffixes, key=len, reverse=True)) + ")" + self.END + ")"
+                   if suffixes else "")
         self.pattern = re.compile(
-            "(?:" + "|".join(re.escape(v) for v in sorted(variants, key=len, reverse=True)) + r")(?![^\\/'\"\s,;:)\]}])",
+            "(?:" + "|".join(re.escape(v) for v in sorted(variants, key=len, reverse=True)) + ")" + exclude + self.END,
             re.IGNORECASE,
         ) if variants else None
 
-    def format(self, record: logging.LogRecord) -> str:
-        text = super().format(record)
+    def mask(self, text: str) -> str:
         return self.pattern.sub("%USERPROFILE%", text) if self.pattern else text
+
+    def format(self, record: logging.LogRecord) -> str:
+        return self.mask(super().format(record))
+
+
+def scrub_old_logs(path: Path, formatter: PrivacyFormatter) -> None:
+    """이전 분석판(2.0.0)이 남긴 로그에도 사용자 폴더가 있을 수 있다. 새 기록은 그 뒤에 이어지므로 켤 때 한 번 가린다."""
+    for file in (path, path.with_name(path.name + ".1")):
+        try:
+            text = file.read_text(encoding="utf-8", errors="replace")
+            masked = formatter.mask(text)
+            if masked != text:
+                file.write_text(masked, encoding="utf-8")
+        except OSError:
+            pass
 
 
 LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
@@ -118,8 +168,10 @@ def setup_logging(verbose: bool, *, diagnostic: bool = False) -> None:
     root = logging.getLogger()
     root.setLevel(logging.DEBUG if verbose or diagnostic else logging.INFO)
     if diagnostic:
+        formatter = PrivacyFormatter(LOG_FORMAT)
+        scrub_old_logs(log_path(), formatter)
         handler = RotatingFileHandler(log_path(), maxBytes=1_000_000, backupCount=1, encoding="utf-8")
-        handler.setFormatter(PrivacyFormatter(LOG_FORMAT))
+        handler.setFormatter(formatter)
         root.addHandler(handler)
     else:
         root.addHandler(logging.NullHandler())

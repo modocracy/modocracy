@@ -12,8 +12,9 @@ from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QCheckBox, QComboBox, QPushButton, QRadioButton
+from PySide6.QtCore import QEvent, Qt
+from PySide6.QtGui import QKeyEvent
+from PySide6.QtWidgets import QApplication, QButtonGroup, QCheckBox, QComboBox, QPushButton, QRadioButton
 
 from hd2mm import app, i18n, updater
 from hd2mm.core import Library, ModError, NeedsConfirm
@@ -163,6 +164,8 @@ class NativeTests(unittest.TestCase):
         choices[1].click()
         self.wait(lambda: not self.window.busy)
         self.assertEqual(self.lib.snapshot()[0].state["choice"], 1)
+        # 선택 묶음은 상세 화면과 함께 지워진다 (다시 그릴 때마다 쌓이지 않게)
+        self.assertFalse([c for c in self.window.detail_scroll.children() if isinstance(c, QButtonGroup)])
         self.assertTrue(self.window.selected_mod()["files"][0]["source"].startswith("b/"))
 
     def test_folder_picker_is_a_native_dialog_and_cancel_preserves_path(self):
@@ -233,6 +236,66 @@ class NativeTests(unittest.TestCase):
         self.assertEqual(self.server.active_operations, 0)
         self.assertTrue(self.window.deploy_button.isEnabled())
 
+    def quiet_gate(self):
+        """뒤에서 조용히 도는 작업(15초 새로고침 등)을 흉내 낸다. 돌려준 이벤트를 set하면 끝난다."""
+        started, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+
+        def slow():
+            started.set()
+            release.wait(5)
+        self.assertTrue(self.window.run_task(slow, quiet=True))
+        self.wait(started.is_set)
+        return release
+
+    def test_changes_during_quiet_task_use_latest_state(self):
+        manifest = {"Version": 1, "Name": "Three", "Options": [
+            {"Name": name, "Include": [folder]} for name, folder in (("A", "a"), ("B", "b"), ("C", "c"))]}
+        archive = make_zip(self.root / "three.zip", {"manifest.json": json.dumps(manifest), f"a/{ARCHIVE}.patch_0": "a",
+                                                    f"b/{ARCHIVE}.patch_0": "b", f"c/{ARCHIVE}.patch_0": "c"})
+        self.window.import_paths([str(archive)])
+        self.wait(lambda: not self.window.busy and len(self.window.state["mods"]) > 0)
+        mod = self.window.selected_mod()
+        self.assertEqual(mod["state"]["enabledOptions"], [True, True, True])
+        release = self.quiet_gate()
+        self.assertTrue(self.window.detail_scroll.isEnabled())  # 조용한 작업 중에도 화면을 막지 않는다
+        # 두 번 모두 옛 화면(mod) 기준으로 누른다. 앞의 변경이 뒤의 변경에 덮어쓰이면 안 된다
+        self.window.change_array(mod, "enabledOptions", 0, False)
+        self.window.change_array(mod, "enabledOptions", 1, False)
+        self.window.move_mod(mod["id"], None)
+        self.assertEqual(len(self.window._pending), 3)
+        release.set()
+        self.wait(lambda: not self.window.busy and not self.window._pending)
+        self.assertEqual(self.lib.snapshot()[0].state["enabledOptions"], [False, False, True])
+
+    def test_close_during_quiet_task_saves_pending_change(self):
+        mod = self.import_mod()
+        release = self.quiet_gate()
+        self.window.change_mod(mod["id"], {"enabled": False})
+        self.window.close()
+        self.assertTrue(self.window.isVisible())  # 받아 둔 변경을 저장하기 전에는 닫지 않는다
+        release.set()
+        self.wait(lambda: not self.window.isVisible())
+        self.assertFalse(self.lib.snapshot()[0].enabled)
+
+    def test_space_key_toggles_selected_mod(self):
+        self.import_mod()
+        self.window.mod_list.setCurrentRow(0)
+        QApplication.sendEvent(self.window.mod_list, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Space,
+                                                               Qt.KeyboardModifier.NoModifier, " "))
+        self.wait(lambda: not self.window.busy)
+        self.assertFalse(self.lib.snapshot()[0].enabled)
+
+    def test_unrelated_state_change_keeps_detail_widgets(self):
+        self.import_mod()
+        self.window.detail_scroll.widget().setProperty("marker", "kept")
+        with mock.patch("hd2mm.server.gameinfo.is_game_running", return_value=True):
+            self.window.refresh(quiet=True)
+            self.wait(lambda: not self.window.busy)
+        self.assertTrue(self.window.state["game"]["running"])
+        # 게임 실행 여부만 바뀌었으니 펼쳐 둔 선택 상자·포커스가 있는 상세 화면은 그대로 둔다
+        self.assertEqual(self.window.detail_scroll.widget().property("marker"), "kept")
+
     def test_readme_is_loaded_as_plain_text(self):
         mod = self.import_mod()
         with mock.patch.object(self.window, "text_dialog") as dialog:
@@ -252,7 +315,7 @@ class BuildVariantTests(unittest.TestCase):
         self.assertIsInstance(logger.handlers[0], logging.NullHandler)
 
     def test_diagnostic_log_hides_user_folder(self):
-        formatter = app.PrivacyFormatter(app.LOG_FORMAT, home=r"C:\Users\Jane Doe")
+        formatter = app.PrivacyFormatter(app.LOG_FORMAT, homes=[r"C:\Users\Jane Doe"], siblings=[])
         record = logging.LogRecord("hd2mm", logging.INFO, __file__, 1, "%s | %s | %s | %s", (
             r"C:\Users\Jane Doe\AppData\Local\Modocracy",
             {"backup": r"c:\users\jane doe\Games\backup"},  # dict는 \가 두 번 찍힌다
@@ -272,14 +335,36 @@ class BuildVariantTests(unittest.TestCase):
         self.assertIn(r"C:\Users\Jane Doe2\keep", text)
         self.assertIn(r"cannot open %USERPROFILE%\x.txt", text)
 
+    def test_diagnostic_log_hides_short_path_but_not_other_users(self):
+        formatter = app.PrivacyFormatter(app.LOG_FORMAT, homes=[r"C:\Users\Jane Doe", r"C:\Users\JANEDO~1"],
+                                         siblings=["Jane Doe Smith"])
+        text = formatter.mask(r"_MEI C:\Users\JANEDO~1\AppData\Local\Temp\_MEI1 | C:\Users\Jane Doe Smith\x | "
+                              r"at C:\Users\Jane Doe and C:\Users\Jane Doe\y")
+        self.assertIn(r"%USERPROFILE%\AppData\Local\Temp\_MEI1", text)
+        self.assertIn(r"C:\Users\Jane Doe Smith\x", text)  # 이름이 겹치는 다른 사용자 폴더
+        self.assertEqual(text.count("%USERPROFILE%"), 3)
+
+    def test_diagnostic_start_scrubs_old_logs(self):
+        with tempfile.TemporaryDirectory() as folder:
+            log = Path(folder) / "log.txt"
+            log.write_text("old C:\\Users\\Jane Doe\\AppData x\n", encoding="utf-8")
+            log.with_name("log.txt.1").write_text("older 'C:\\\\Users\\\\Jane Doe\\\\a'\n", encoding="utf-8")
+            formatter = app.PrivacyFormatter(app.LOG_FORMAT, homes=[r"C:\Users\Jane Doe"], siblings=[])
+            app.scrub_old_logs(log, formatter)
+            for file in (log, log.with_name("log.txt.1")):
+                self.assertNotIn("Jane Doe", file.read_text(encoding="utf-8"))
+            app.scrub_old_logs(Path(folder) / "missing.txt", formatter)  # 파일이 없어도 괜찮다
+
     def test_diagnostic_log_file_uses_privacy_formatter(self):
         logger = logging.Logger("diagnostic-test")
         with mock.patch.object(app.logging, "getLogger", return_value=logger), \
                 mock.patch.object(app, "RotatingFileHandler") as file_handler, \
+                mock.patch.object(app, "scrub_old_logs") as scrub, \
                 mock.patch.object(app.sys, "stderr", None):
             app.setup_logging(False, diagnostic=True)
         formatter = file_handler.return_value.setFormatter.call_args.args[0]
         self.assertIsInstance(formatter, app.PrivacyFormatter)
+        scrub.assert_called_once()  # 새 기록을 이어 쓰기 전에 옛 로그를 먼저 가린다
 
     def test_diagnostic_updater_chooses_diagnostic_asset_only(self):
         data = release_json()
