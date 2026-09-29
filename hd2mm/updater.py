@@ -21,7 +21,7 @@ from .core import ModError, version_key
 from .gameinfo import CREATE_NO_WINDOW
 from .i18n import t
 
-REPO = "modocracy/modocracy"
+REPO = "JJ-dot-eng/modocracy"
 LATEST_API = f"https://api.github.com/repos/{REPO}/releases/latest"
 RELEASES_PAGE = f"https://github.com/{REPO}/releases/latest"
 DOWNLOAD_PREFIX = f"https://github.com/{REPO}/releases/download/"
