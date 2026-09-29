@@ -1,6 +1,6 @@
 
 
-Modocracy 2.0.3 — Open-source notices
+Modocracy 2.0.4 — Open-source notices
 
 Modocracy is distributed under the MIT license.
 Source and rebuild instructions: https://github.com/modocracy/modocracy
