@@ -15,7 +15,7 @@ from urllib.parse import parse_qs, quote, unquote, urlsplit
 
 from . import __version__, gameinfo, i18n, updater
 from .i18n import t
-from .core import Library, ModError, NeedsConfirm, analyze, mtime_ns, safe_join
+from .core import Library, ModError, NeedsConfirm, analyze, clean_archive_name, mtime_ns, safe_join
 from .paths import log_path
 
 log = logging.getLogger(__name__)
@@ -595,7 +595,8 @@ def build_state(lib: Library) -> dict:
                 "readmeRev": _revision(root / info.readme_file) if info.readme_file else None,
             })
         else:
-            mod["name"] = entry.get("fallbackName") or entry.get("sourceName") or snap.id
+            fallback = entry.get("fallbackName")
+            mod["name"] = (clean_archive_name(fallback) if fallback else None) or entry.get("sourceName") or snap.id
         mods.append(mod)
     return {
         "appVersion": __version__,

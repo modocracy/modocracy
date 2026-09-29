@@ -316,9 +316,28 @@ def _read_extra_manifest(root: Path) -> dict | None:
     return None
 
 
+# Nexus가 내려받은 파일 이름 뒤에 붙이는 모드 번호·버전·날짜
+_NEXUS_NAME = re.compile(r"^(?P<name>.+?)[ _]+\d+[ _]+\S+[ _]+\d{4}-\d{2}-\d{2}T\d{2}-\d{2}(?:-\d{2})?Z[ _]+[A-Za-z0-9]+$")
+_NEXUS_NAME_OLD = re.compile(r"^(?P<name>.+?)-\d+(?:-[0-9A-Za-z]+)*-\d{10}$")
+
+
+def clean_archive_name(stem: str) -> str:
+    """manifest가 없어 파일 이름을 모드 이름으로 쓸 때, Nexus가 붙인 꼬리를 뗀다.
+
+    'Helldivers 2 Optimizer 1.1 16573 1.1 2026-09-27T13-31Z 2Gg9W5DlI' → 'Helldivers 2 Optimizer 1.1'
+    'Some Mod-16573-1-1-1790515882' → 'Some Mod'. 꼬리가 없는 이름은 그대로 둔다.
+    """
+    text = stem.strip()
+    for pattern in (_NEXUS_NAME, _NEXUS_NAME_OLD):
+        match = pattern.match(text)
+        if match and match.group("name").strip(" -_"):
+            return match.group("name").strip(" -_")
+    return text
+
+
 def parse_mod(root: Path, fallback_name: str | None = None) -> ModInfo:
     manifest_path = _find_child(root, "manifest.json")
-    info = ModInfo(root=root, guid=None, name=fallback_name or root.name)
+    info = ModInfo(root=root, guid=None, name=clean_archive_name(fallback_name) if fallback_name else root.name)
     info.readme_file = _find_readme(root)
     info.extra = _read_extra_manifest(root)
     if manifest_path:

@@ -12,7 +12,7 @@ from pathlib import Path
 from unittest import mock
 
 from hd2mm.core import (
-    MAX_README_BYTES, PATCH_RE, Library, ModError, NeedsConfirm, analyze, build_plan, clean_guid,
+    MAX_README_BYTES, PATCH_RE, Library, ModError, NeedsConfirm, analyze, build_plan, clean_archive_name, clean_guid,
     legacy_plan_signature, parse_mod, read_readme, read_text, safe_join,
 )
 
@@ -233,6 +233,24 @@ class SyntheticModTests(TempCase):
         contents = sorted((self.game / "data" / f).read_text() for f in self.game_files()
                           if "." not in f.split("patch_")[1])
         self.assertEqual(contents, ["city", "w0", "w1"])
+
+    def test_nexus_download_suffix_is_removed_from_name(self):
+        cases = {
+            "Helldivers 2 Optimizer 1.1 16573 1.1 2026-09-27T13-31Z 2Gg9W5DlI": "Helldivers 2 Optimizer 1.1",
+            "Some Mod-16573-1-1-1790515882": "Some Mod",
+            "Better Mod v2-123-2-0-beta-1790515882": "Better Mod v2",
+            # 꼬리가 없는 이름은 건드리지 않는다
+            "Enemy-Collision-Synchronized-v2.9": "Enemy-Collision-Synchronized-v2.9",
+            "Bingus-Shared-Loader-v17": "Bingus-Shared-Loader-v17",
+            "My Cool Mod v2": "My Cool Mod v2",
+            "Pack 2026": "Pack 2026",
+        }
+        for raw, expected in cases.items():
+            self.assertEqual(clean_archive_name(raw), expected, raw)
+        name = "Helldivers 2 Optimizer 1.1 16573 1.1 2026-09-27T13-31Z 2Gg9W5DlI.zip"
+        archive = make_zip(self.tmp / name, {f"{ARCHIVE}.patch_0": "p"})
+        self.assertEqual(self.lib.import_archive(archive, name)["name"], "Helldivers 2 Optimizer 1.1")
+        self.assertEqual(self.lib.snapshot()[0].info.name, "Helldivers 2 Optimizer 1.1")
 
     def test_no_manifest_variant_folders_pick_one(self):
         # 폴더마다 같은 파일의 다른 버전이 있으면 하나만 고른다
