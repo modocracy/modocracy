@@ -152,8 +152,7 @@ def load_edge_chrome():
 def disable_webview_gpu() -> None:
     """WebView2가 그래픽카드(GPU) 대신 CPU로 화면을 그리게 한다.
 
-    그래픽 드라이버·오버레이(Afterburner, Discord 등)와 맞지 않는 PC에서 GPU로 그리면
-    화면 일부(글자, 박스)만 나오거나 검은 화면이 랜덤으로 나온다.
+    그래픽 드라이버와의 충돌 가능성을 줄인다. 파일 로딩 실패나 렌더러 종료는 별도로 기록한다.
     옵션은 두 곳에 넣는다: 환경 변수(관리자 권한 실행이면 WebView2가 무시한다)와 코드(관리자여도 적용된다).
     """
     os.environ[BROWSER_ARGS_ENV] = with_flag(os.environ.get(BROWSER_ARGS_ENV), GPU_OFF_FLAG)
@@ -187,6 +186,7 @@ def patch_edge_chrome(module) -> None:
                     if props is not None and not done:
                         props.AdditionalBrowserArguments = with_flag(props.AdditionalBrowserArguments, GPU_OFF_FLAG)
                         done.append(True)
+                        log.info("WebView2 GPU 비활성화 옵션 적용")
                 except Exception:  # noqa: BLE001 - 창 만들기를 방해하지 않도록 기록만 한다
                     log.exception("WebView2 옵션 수정 실패")
 
@@ -197,6 +197,32 @@ def patch_edge_chrome(module) -> None:
                 form.ControlAdded -= on_control_added
             if not done:
                 log.warning("WebView2에 GPU 끄기를 코드로 넣지 못했어요. 관리자 권한으로 실행하면 적용되지 않을 수 있어요.")
+
+        def on_webview_ready(self, sender, event):
+            if event.IsSuccess:
+                try:
+                    core = sender.CoreWebView2
+                    log.info("WebView2 초기화 완료: 런타임 %s", core.Environment.BrowserVersionString)
+                    core.ProcessFailed += self.on_process_failed
+                except Exception:  # 진단 기능 때문에 창 초기화가 중단되지 않도록 한다.
+                    log.exception("WebView2 진단 연결 실패")
+            else:
+                log.error("WebView2 초기화 실패: %s", event.InitializationException)
+            return super().on_webview_ready(sender, event)
+
+        def on_navigation_completed(self, sender, event):
+            if event.IsSuccess:
+                log.info("WebView2 페이지 탐색 완료")
+            else:
+                log.error("WebView2 페이지 탐색 실패: %s", event.WebErrorStatus)
+            return super().on_navigation_completed(sender, event)
+
+        def on_process_failed(self, sender, event):
+            log.error(
+                "WebView2 프로세스 오류: kind=%s reason=%s exit=%s",
+                event.ProcessFailedKind, getattr(event, "Reason", "unknown"),
+                getattr(event, "ExitCode", "unknown"),
+            )
 
     module.EdgeChrome = EdgeChrome
 

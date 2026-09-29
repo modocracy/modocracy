@@ -15,7 +15,7 @@ function applyStaticText() {
   document.querySelectorAll('[data-i18n]').forEach((el) => { el.textContent = t(el.dataset.i18n); });
   document.querySelectorAll('[data-i18n-title]').forEach((el) => { el.title = t(el.dataset.i18nTitle); });
   document.querySelectorAll('[data-i18n-aria]').forEach((el) => { el.setAttribute('aria-label', t(el.dataset.i18nAria)); });
-  document.documentElement.classList.add('i18n-ready'); // 번역 전 기본 문구는 CSS가 가려 둔다
+  document.documentElement.classList.add('i18n-ready');
 }
 
 // ------------------------------------------------------------ 아이콘
@@ -133,6 +133,7 @@ async function refresh({ quiet = false } = {}) {
   state = next;
   if (!state.mods.some((m) => m.id === selectedId)) selectedId = state.mods[0]?.id ?? null;
   render();
+  window.dispatchEvent(new Event('hd2mm-ready'));
 }
 
 function render() {

@@ -30,7 +30,7 @@ STATIC_FILES = {
 MAX_JSON_BYTES = 1024 * 1024
 # 보관함을 건드리지 않는 요청. 폴더 선택 창처럼 오래 걸려도 다른 요청을 막지 않도록 잠금 없이 처리한다.
 # 업데이트 설치도 보관함을 건드리지 않는다 (내려받는 동안 화면이 멈추지 않도록)
-LOCK_FREE_POSTS = {"/api/pick-folder", "/api/detect-game", "/api/update/install", "/api/update/check"}
+LOCK_FREE_POSTS = {"/api/pick-folder", "/api/detect-game", "/api/update/install", "/api/update/check", "/api/ui-diagnostics"}
 UPDATE_CHECK_SECONDS = 30 * 60  # 새 버전 확인 결과를 다시 쓰는 시간
 RASTER_TYPES = {
     ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
@@ -61,6 +61,7 @@ class AppServer(ThreadingHTTPServer):
         self.on_ready = None  # 화면이 처음 제대로 뜨면 한 번 부른다 (업데이트 뒤 옛 exe 정리)
         self.updating = False  # 새 버전을 받는 중: 다른 변경 작업은 받지 않는다
         self.update_cache: tuple[float, updater.Release] | None = None
+        self.ui_reports = 0
         if auto_exit:
             self.start_auto_exit()
 
@@ -314,6 +315,18 @@ class Handler(BaseHTTPRequestHandler):
     def _post(self, path: str, body: dict):
         lib = self.server.library
         parts = path.strip("/").split("/")
+        if path == "/api/ui-diagnostics":
+            event, detail = body.get("event"), body.get("detail", "")
+            if event not in ("ready", "error") or not isinstance(detail, str):
+                raise ModError(t("err.bad_request"))
+            with self.server.client_lock:
+                if self.server.ui_reports >= 100:
+                    return {"ok": True}
+                self.server.ui_reports += 1
+            # JS 예외나 요청 값의 줄바꿈이 별도 로그처럼 보이지 않게 JSON 문자열로 남긴다.
+            write_log = log.info if event == "ready" else log.warning
+            write_log("UI %s: %s", event, json.dumps(detail[:2000], ensure_ascii=False))
+            return {"ok": True}
         if path == "/api/order":
             ids = body.get("ids")
             if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):

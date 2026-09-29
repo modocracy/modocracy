@@ -66,6 +66,18 @@ The app is shown in English unless Windows is set to Korean. You can change it i
 exe 파일 옆에 `ModocracyData` 폴더를 만들어 두면 그 폴더를 대신 사용합니다(USB 등 휴대용).
 이전 이름(HD2ModManager)으로 쓰던 보관 폴더는 처음 실행할 때 자동으로 옮겨집니다.
 
+## 화면이 일부만 보이거나 검게 나올 때
+
+1. 프로그램을 완전히 종료한 뒤, exe가 있는 폴더에서 `Modocracy.exe --browser`로 실행해 보세요.
+   PowerShell에서는 `.\Modocracy.exe --browser`를 사용합니다. 같은 화면을 Edge 창으로 열어 전용 WebView2 창과 비교합니다.
+2. 제보할 때는 앱 버전, Windows 버전, 위 실행 방식에서도 발생하는지와 문제가 생긴 직후의 `log.txt`를 함께 알려 주세요.
+   화면을 쓸 수 없어도 위의 파일 저장 위치에서 로그를 찾을 수 있습니다. 공유하기 전에 개인 폴더 경로 등을 확인하세요.
+3. 로그의 `UI error: resource`는 CSS·JS 파일 로딩 실패, `UI error: javascript` / `promise`는 화면 코드 실행 오류입니다.
+   `WebView2 초기화 실패`, `페이지 탐색 실패`, `프로세스 오류`는 전용 창 내부의 실패를 구분합니다.
+   `UI ready`는 화면 코드가 최초 구성을 마쳤다는 뜻이며, 실제 픽셀이 정상으로 표시됐다는 보장은 아닙니다.
+
+GPU 가속을 꺼도 파일 로딩·JavaScript·WebView2 프로세스 문제는 남을 수 있으므로, 증상만으로 GPU 문제라고 단정하지 않습니다.
+
 ## 개발자용
 
 ```bat

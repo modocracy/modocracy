@@ -6,6 +6,59 @@
   <meta name="hd2mm-token" content="__HD2MM_TOKEN__">
   <meta name="color-scheme" content="dark">
   <title>Modocracy</title>
+  <script>
+    // 외부 JS/CSS가 실패해도 오류를 기록하고 다시 시도할 수 있어야 한다.
+    (() => {
+      let reports = 0;
+      let failed = false;
+      const token = document.querySelector('meta[name="hd2mm-token"]').content;
+      function report(event, detail) {
+        if (reports++ >= 20) return;
+        fetch('/api/ui-diagnostics', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-HD2MM-Token': token },
+          body: JSON.stringify({ event, detail: String(detail).slice(0, 2000) }),
+        }).catch(() => {});
+      }
+      function showError() {
+        if (document.getElementById('startupError')) return;
+        const en = document.documentElement.lang === 'en';
+        const notice = document.createElement('div');
+        notice.id = 'startupError';
+        notice.setAttribute('role', 'alert');
+        notice.style.cssText = 'position:fixed;bottom:16px;left:16px;right:16px;z-index:10000;padding:16px;background:#331b1b;color:#fff;border:1px solid #ff8178;font:14px/1.5 sans-serif';
+        notice.textContent = en
+          ? 'The interface could not load correctly. Retry, or restart Modocracy with --browser. Details are in log.txt. '
+          : '화면을 제대로 불러오지 못했어요. 다시 시도하거나, 종료 후 Modocracy를 --browser 옵션으로 실행해 주세요. 오류 확인: log.txt. ';
+        const retry = document.createElement('button');
+        retry.textContent = en ? 'Retry' : '다시 시도';
+        retry.style.cssText = 'padding:6px 12px;background:#fff;color:#111;border:1px solid #888;cursor:pointer';
+        retry.addEventListener('click', () => location.reload());
+        notice.append(retry);
+        document.body.append(notice);
+      }
+      function fail(detail) {
+        failed = true;
+        report('error', detail);
+        if (document.body) showError();
+        else document.addEventListener('DOMContentLoaded', showError, { once: true });
+      }
+      window.addEventListener('error', (event) => {
+        const target = event.target;
+        if (target && target !== window) {
+          if (target.tagName === 'SCRIPT' || (target.tagName === 'LINK' && target.rel === 'stylesheet')) {
+            fail('resource: ' + (target.src || target.href));
+          }
+        } else {
+          fail('javascript: ' + event.message + ' at ' + event.filename + ':' + event.lineno + ':' + event.colno);
+        }
+      }, true);
+      window.addEventListener('unhandledrejection', (event) => fail('promise: ' + String(event.reason)));
+      window.addEventListener('hd2mm-ready', () => {
+        if (!failed) report('ready', navigator.userAgent);
+      }, { once: true });
+    })();
+  </script>
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/style.css">
 </head>

@@ -62,6 +62,31 @@ class ServerCase(unittest.TestCase):
 
 
 class ServerTests(ServerCase):
+    def test_ui_diagnostics_require_token_and_validate_body(self):
+        body = {"event": "error", "detail": "resource: /i18n.js"}
+        self.assertEqual(self.request("/api/ui-diagnostics", body=body, token=False)[0], 403)
+        for body in ({"event": "other"}, {"event": "error", "detail": []}):
+            with self.subTest(body=body):
+                self.assertEqual(self.request("/api/ui-diagnostics", body=body)[0], 400)
+        self.assertEqual(self.server.ui_reports, 0)
+
+    def test_ui_diagnostics_log_resource_failure_and_readiness(self):
+        with self.assertLogs("hd2mm.server", "INFO") as logs:
+            self.assertEqual(self.request("/api/ui-diagnostics", body={"event": "error", "detail": "resource: /i18n.js"})[0], 200)
+            self.assertEqual(self.request("/api/ui-diagnostics", body={"event": "ready", "detail": "test runtime"})[0], 200)
+        self.assertIn('UI error: "resource: /i18n.js"', logs.output[0])
+        self.assertIn('UI ready: "test runtime"', logs.output[1])
+
+    def test_ui_diagnostics_bound_and_escape_log_messages(self):
+        with self.assertLogs("hd2mm.server", "WARNING") as logs:
+            self.request("/api/ui-diagnostics", body={"event": "error", "detail": "bad\n" + "x" * 3000})
+        self.assertNotIn("\n", logs.output[0])
+        self.assertIn("bad\\n", logs.output[0])
+        self.assertLess(len(logs.output[0]), 2100)
+        self.server.ui_reports = 100
+        with self.assertNoLogs("hd2mm.server", "WARNING"):
+            self.assertEqual(self.request("/api/ui-diagnostics", body={"event": "error", "detail": "repeated"})[0], 200)
+
     def test_index_contains_token(self):
         with urllib.request.urlopen(self.base + "/", timeout=5) as res:
             html = res.read().decode()
@@ -431,6 +456,12 @@ def fake_edge_module(attach=True):
                     handler(form, mock.Mock())
             self.started_with = self.webview.CreationProperties.AdditionalBrowserArguments  # 켜는 순간의 옵션
 
+        def on_webview_ready(self, sender, event):
+            self.initialized = event.IsSuccess
+
+        def on_navigation_completed(self, sender, event):
+            self.navigated = event.IsSuccess
+
     return mock.Mock(EdgeChrome=EdgeChrome)
 
 
@@ -535,6 +566,37 @@ class AppWindowTests(unittest.TestCase):
             browser = edge.EdgeChrome(form, None, "cache")
         self.assertEqual(browser.started_with, "--disable-features=ElasticOverscroll")
         self.assertEqual(form.ControlAdded.handlers, [])
+
+    def test_webview_runtime_navigation_and_process_failures_are_logged(self):
+        app.patch_edge_chrome(self.edge)
+        browser = self.edge.EdgeChrome(mock.Mock(ControlAdded=FakeControlAdded()), None, "cache")
+        core = mock.Mock(ProcessFailed=FakeControlAdded())
+        core.Environment.BrowserVersionString = "123.0.0.0"
+        sender = mock.Mock(CoreWebView2=core)
+        with self.assertLogs("hd2mm", "INFO") as logs:
+            browser.on_webview_ready(sender, mock.Mock(IsSuccess=True))
+            browser.on_navigation_completed(sender, mock.Mock(IsSuccess=False, WebErrorStatus="ConnectionAborted"))
+            core.ProcessFailed.handlers[0](core, mock.Mock(ProcessFailedKind="RenderProcessExited", Reason="Crashed", ExitCode=5))
+        self.assertTrue(browser.initialized)
+        self.assertFalse(browser.navigated)
+        self.assertIn("123.0.0.0", logs.output[0])
+        self.assertIn("ConnectionAborted", logs.output[1])
+        self.assertIn("kind=RenderProcessExited reason=Crashed exit=5", logs.output[2])
+
+    def test_webview_initialization_error_is_logged(self):
+        app.patch_edge_chrome(self.edge)
+        browser = self.edge.EdgeChrome(mock.Mock(ControlAdded=FakeControlAdded()), None, "cache")
+        with self.assertLogs("hd2mm", "ERROR") as logs:
+            browser.on_webview_ready(None, mock.Mock(IsSuccess=False, InitializationException="runtime unavailable"))
+        self.assertFalse(browser.initialized)
+        self.assertIn("runtime unavailable", logs.output[0])
+
+    def test_diagnostic_hook_failure_does_not_interrupt_initialization(self):
+        app.patch_edge_chrome(self.edge)
+        browser = self.edge.EdgeChrome(mock.Mock(ControlAdded=FakeControlAdded()), None, "cache")
+        with self.assertLogs("hd2mm", "ERROR"):
+            browser.on_webview_ready(mock.Mock(CoreWebView2=None), mock.Mock(IsSuccess=True))
+        self.assertTrue(browser.initialized)
 
     def test_with_flag_keeps_existing_arguments(self):
         self.assertEqual(app.with_flag(None, "--disable-gpu"), "--disable-gpu")
