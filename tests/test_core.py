@@ -213,6 +213,36 @@ class SyntheticModTests(TempCase):
         self.lib.deploy(self.game)
         self.assertEqual((self.game / "data" / "3333333333333333.patch_0").read_text(), "b")
 
+    def test_no_manifest_part_folders_are_all_installed(self):
+        # 최적화 모드처럼 manifest 없이 부분별 폴더에 서로 다른 파일이 있으면 모두 함께 설치한다
+        archive = make_zip(self.tmp / "optimizer.zip", {
+            f"City LOD/{ARCHIVE}.patch_700": "city",
+            f"NPC Texture/{ARCHIVE}.patch_809": "npc",
+            f"World Texture Particle/{ARCHIVE}.patch_800": "w0",
+            f"World Texture Particle/{ARCHIVE}.patch_801": "w1",
+        })
+        mod_id = self.lib.import_archive(archive, "optimizer.zip")["id"]
+        snap = self.lib.snapshot()[0]
+        self.assertEqual(snap.info.mode, "multi")
+        self.assertEqual([o.name for o in snap.info.options], ["City LOD", "NPC Texture", "World Texture Particle"])
+        self.assertEqual(snap.state["enabledOptions"], [True, True, True])
+        self.lib.deploy(self.game)
+        self.assertEqual(len([f for f in self.game_files() if f.startswith(ARCHIVE) and "." not in f.split("patch_")[1]]), 4)
+        self.lib.update(mod_id, {"enabledOptions": [True, False, True]})  # 부분별로 끌 수도 있다
+        self.lib.deploy(self.game)
+        contents = sorted((self.game / "data" / f).read_text() for f in self.game_files()
+                          if "." not in f.split("patch_")[1])
+        self.assertEqual(contents, ["city", "w0", "w1"])
+
+    def test_no_manifest_variant_folders_pick_one(self):
+        # 폴더마다 같은 파일의 다른 버전이 있으면 하나만 고른다
+        archive = make_zip(self.tmp / "colors.zip", {
+            f"Red/{ARCHIVE}.patch_0": "red",
+            f"Blue/{ARCHIVE}.patch_0": "blue",
+        })
+        self.lib.import_archive(archive, "colors.zip")
+        self.assertEqual(self.lib.snapshot()[0].info.mode, "single")
+
     def test_no_manifest_with_wrapper_folder(self):
         archive = make_zip(self.tmp / "My Cool Mod v2.zip", {
             "My Cool Mod/readme.txt": "hello",

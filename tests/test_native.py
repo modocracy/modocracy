@@ -18,7 +18,7 @@ from PySide6.QtWidgets import QApplication, QButtonGroup, QCheckBox, QComboBox, 
 
 from hd2mm import app, i18n, updater
 from hd2mm.core import Library, ModError, NeedsConfirm
-from hd2mm.native_ui import MainWindow, SettingsDialog, configure_qt
+from hd2mm.native_ui import ChoiceDialog, MainWindow, SettingsDialog, configure_qt
 from hd2mm.server import AppServer
 from hd2mm.ui_text import CATALOG, tr
 from tests.test_core import ARCHIVE, make_zip
@@ -129,10 +129,12 @@ class NativeTests(unittest.TestCase):
         self.import_mod()
         original = self.game / "data" / (ARCHIVE + ".patch_7")
         original.write_text("other manager")
-        with mock.patch.object(self.window, "choose", return_value=None):
+        with mock.patch.object(self.window, "choose", return_value=None) as choose:
             self.window.game_action("deploy")
             self.wait(lambda: not self.window.busy)
         self.assertEqual(original.read_text(), "other manager")
+        # 다른 모드 파일 목록은 본문이 아니라 스크롤되는 목록 칸으로 넘긴다
+        self.assertTrue(any(original.name in line for line in choose.call_args.kwargs["details"]))
         with mock.patch.object(self.window, "choose", return_value="move"):
             self.window.game_action("deploy")
             self.wait(lambda: not self.window.busy)
@@ -140,6 +142,28 @@ class NativeTests(unittest.TestCase):
         backups = list(self.lib.backups_dir.rglob(original.name))
         self.assertEqual(len(backups), 1)
         self.assertEqual(backups[0].read_text(), "other manager")
+
+    def test_long_list_dialog_stays_on_screen_with_buttons_visible(self):
+        details = [f"9ba626afa44a3aa3.patch_{i} · 알 수 없는 모드" for i in range(400)]
+        dialog = ChoiceDialog(self.window, "t", "본문", [("취소", None), ("그대로 두기", "keep"), ("옮기고 적용", "move")],
+                              details=details)
+        dialog.show()
+        self.qt.processEvents()
+        area = dialog.screen().availableGeometry()
+        self.assertLessEqual(dialog.height(), area.height())
+        self.assertTrue(dialog.scroll.verticalScrollBar().maximum() > 0)  # 목록은 스크롤로 본다
+        move = next(b for b in dialog.findChildren(QPushButton) if b.text() == "옮기고 적용")
+        bottom = move.mapTo(dialog, move.rect().bottomLeft()).y()
+        self.assertTrue(move.isVisible())
+        self.assertLessEqual(bottom, dialog.height())  # 버튼이 창 안에 보인다
+        move.click()
+        self.assertEqual(dialog.value, "move")
+        dialog.deleteLater()
+        cancel = ChoiceDialog(self.window, "t", "본문", [("취소", None), ("삭제", True)], danger=True)
+        cancel.show()
+        cancel.reject()  # Esc·닫기는 첫 항목(취소)
+        self.assertIsNone(cancel.value)
+        cancel.deleteLater()
 
     def test_delete_requires_confirmation(self):
         mod = self.import_mod()

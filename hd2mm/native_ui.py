@@ -1278,7 +1278,7 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, self.close)
 
     def show_error(self, exc):
-        QMessageBox.warning(self, APP_NAME, str(exc) if isinstance(exc, ModError) else i18n.t("err.unknown"))
+        self.alert(str(exc) if isinstance(exc, ModError) else i18n.t("err.unknown"))
 
     def refresh(self, quiet=False):
         def failed(exc):
@@ -1753,24 +1753,14 @@ class MainWindow(QMainWindow):
         self.command(f"/api/mods/{mod_id}", body)
 
     # ---- 대화 상자
-    def choose(self, title, text, actions, *, danger=False):
-        box = QMessageBox(self)
-        box.setWindowTitle(title)
-        box.setTextFormat(Qt.TextFormat.PlainText)
-        box.setText(text)
-        buttons = []
-        for i, (caption, value) in enumerate(actions):
-            btn = box.addButton(caption, QMessageBox.ButtonRole.RejectRole if i == 0 else QMessageBox.ButtonRole.ActionRole)
-            if i == len(actions) - 1 and i > 0:
-                btn.setProperty("variant", "dangerSolid" if danger else "primary")
-            elif i == 0:
-                btn.setProperty("variant", "ghost")
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            buttons.append((btn, value))
-        box.setDefaultButton(buttons[0][0])
-        box.setEscapeButton(buttons[0][0])
-        box.exec()
-        return next((value for btn, value in buttons if btn == box.clickedButton()), None)
+    def choose(self, title, text, actions, *, danger=False, details=None):
+        dialog = ChoiceDialog(self, title, text, actions, danger=danger, details=details)
+        dialog.exec()
+        dialog.deleteLater()
+        return dialog.value
+
+    def alert(self, text, details=None):
+        self.choose(APP_NAME, text, [(tr("btn.close"), None)], details=details)
 
     def delete_mod(self, mod):
         if self.choose(tr("delete.title"), tr("delete.text", name=mod["name"]) + "\n\n" + tr("delete.note"),
@@ -1789,7 +1779,7 @@ class MainWindow(QMainWindow):
         accepted = [Path(p) for p in paths if Path(p).suffix.lower() in (".zip", ".7z", ".rar")]
         rejected = [Path(p).name for p in paths if Path(p) not in accepted]
         if rejected:
-            QMessageBox.warning(self, APP_NAME, tr("import.only_archives", names=", ".join(rejected)))
+            self.alert(tr("import.only_archives", names=", ".join(rejected)))
         if not accepted:
             return
 
@@ -1820,9 +1810,9 @@ class MainWindow(QMainWindow):
             else:
                 broken = [m for m in self.state["mods"] if m["enabled"] and
                           (m["error"] or any(i["level"] == "error" for i in m["issues"]))]
-                if broken and not self.choose(tr("confirm_broken.title"), tr("confirm_broken.text") + "\n\n" +
-                                              "\n".join(m["name"] for m in broken),
-                                              [(tr("btn.cancel"), False), (tr("confirm_broken.apply"), True)]):
+                if broken and not self.choose(tr("confirm_broken.title"), tr("confirm_broken.text"),
+                                              [(tr("btn.cancel"), False), (tr("confirm_broken.apply"), True)],
+                                              details=[m["name"] for m in broken]):
                     return
         def done(result):
             moved = tr("result.moved") if result.get("backup") else ""
@@ -1847,8 +1837,10 @@ class MainWindow(QMainWindow):
             if kind == "purge":
                 actions.append((tr("unmanaged.keep"), "keep"))
             actions.append((tr("unmanaged.move_apply" if kind == "deploy" else "unmanaged.move"), "move"))
-            choice = self.choose(tr("unmanaged.title"), tr("unmanaged.text") + "\n\n" + "\n".join(groups) +
-                                 "\n\n" + tr("unmanaged.deploy_text" if kind == "deploy" else "unmanaged.purge_text"), actions)
+            # 파일 목록은 길 수 있어 스크롤되는 칸에 따로 넣는다
+            choice = self.choose(tr("unmanaged.title"), tr("unmanaged.text") + "\n\n" +
+                                 tr("unmanaged.deploy_text" if kind == "deploy" else "unmanaged.purge_text"),
+                                 actions, details=groups)
             if choice:
                 self.game_action(kind, mode=choice, launch_after=launch_after, confirmed=True)
         self.command(f"/api/{kind}", {"unmanaged": mode}, done, failed,
@@ -1908,7 +1900,7 @@ class MainWindow(QMainWindow):
             self.update_result = result
             self.render_update()
             if manual and not result["newer"]:
-                QMessageBox.information(self, APP_NAME, tr("update.latest", version=result["current"]))
+                self.alert(tr("update.latest", version=result["current"]))
         def failed(exc):
             if manual:
                 self.show_error(exc)
@@ -2003,6 +1995,67 @@ class MainWindow(QMainWindow):
         self.server.on_exit = None
         log.info("Qt 창 종료")
         event.accept()
+
+
+# ------------------------------------------------------------ 확인 창
+class ChoiceDialog(QDialog):
+    """확인·선택 창. 설명이나 목록이 길어도 창이 화면을 넘지 않게 내용만 스크롤하고 버튼은 늘 아래에 보인다.
+
+    (윈도우 기본 메시지 상자는 목록이 길면 화면 밖으로 커져 버튼을 누를 수 없었다.)
+    actions의 첫 항목은 취소 쪽이다: Esc나 창 닫기를 누르면 그 값을 돌려준다.
+    """
+
+    def __init__(self, parent, title, text, actions, *, danger=False, details=None):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.value = actions[0][1] if actions else None
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        head = label(title, font=make_font(13, QFont.Weight.DemiBold, FONT_DISPLAY), selectable=False)
+        head.setContentsMargins(22, 18, 22, 8)
+        outer.addWidget(head)
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll.viewport().setAutoFillBackground(False)
+        body = QWidget()
+        body.setObjectName("transparent")
+        layout = QVBoxLayout(body)
+        layout.setContentsMargins(22, 4, 22, 12)
+        layout.setSpacing(12)
+        layout.addWidget(label(text, "desc", font=make_font(10)))
+        if details:
+            box = frame("fold")
+            box_layout = QVBoxLayout(box)
+            box_layout.setContentsMargins(12, 10, 12, 10)
+            box_layout.addWidget(label("\n".join(details), font=make_font(9, families=FONT_MONO)))
+            layout.addWidget(box)
+        layout.addStretch()
+        self.scroll.setWidget(body)
+        outer.addWidget(self.scroll, 1)
+        outer.addWidget(divider())
+        buttons = QHBoxLayout()
+        buttons.setContentsMargins(22, 12, 22, 14)
+        buttons.setSpacing(8)
+        buttons.addStretch()
+        for i, (caption, value) in enumerate(actions):
+            last = i == len(actions) - 1
+            variant = ("dangerSolid" if danger else "primary") if last else ("ghost" if i == 0 else "")
+            control = button(caption, lambda v=value: self.pick(v), variant)
+            control.setAutoDefault(False)
+            control.setDefault(i == 0)  # Enter는 안전한 쪽(취소)
+            buttons.addWidget(control)
+        outer.addLayout(buttons)
+        area = (parent.screen() if parent is not None else self.screen()).availableGeometry()
+        width = min(620, area.width() - 40)
+        wanted = layout.totalHeightForWidth(width - 20) if hasattr(layout, "totalHeightForWidth") else body.sizeHint().height()
+        self.resize(width, max(220, min(wanted + 150, int(area.height() * 0.8))))
+        self.setMaximumHeight(area.height() - 40)
+
+    def pick(self, value):
+        self.value = value
+        self.accept()
 
 
 # ------------------------------------------------------------ 설정 창

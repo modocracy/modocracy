@@ -368,8 +368,16 @@ def _auto_layout(info: ModInfo) -> None:
     if len(rels) == 1:
         info.base, info.mode = rels, "fixed"
     elif rels:
-        info.mode = "single"
         info.options = [ModOption(name=r, include=[r]) for r in rels]
+        # 폴더끼리 같은 이름의 패치 파일이 있으면 같은 것을 바꾸는 여러 버전 → 하나만 고른다.
+        # 서로 겹치지 않으면(예: 최적화 모드의 LOD·텍스처 폴더) 함께 쓰는 부분들 → 각각 켜고 끈다(처음엔 모두 켬).
+        seen: set[str] = set()
+        overlap = False
+        for rel in rels:
+            names = {ps.main.name.lower() for ps in scan_patch_sets(safe_join(root, rel) or root)}
+            overlap = overlap or bool(names & seen)
+            seen |= names
+        info.mode = "single" if overlap else "multi"
 
 
 def _guess_image(root: Path) -> str | None:
