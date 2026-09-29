@@ -1,6 +1,6 @@
 """프로그램 시작점: 서버를 띄우고 Modocracy 전용 창을 연다.
 
-전용 창은 Windows의 WebView2 부품으로 화면을 그린다. 쓸 수 없으면 Edge 앱 창(없으면 기본 브라우저)으로 연다.
+기본 화면은 PySide6 Qt Widgets로 그린다. --browser는 이전 웹 화면을 여는 개발용 옵션이다.
 """
 from __future__ import annotations
 
@@ -88,12 +88,15 @@ def migrate_legacy_data(data_dir: Path) -> bool:
     return True
 
 
-def setup_logging(verbose: bool) -> None:
-    handler = RotatingFileHandler(log_path(), maxBytes=1_000_000, backupCount=1, encoding="utf-8")
-    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+def setup_logging(verbose: bool, *, diagnostic: bool = False) -> None:
     root = logging.getLogger()
-    root.setLevel(logging.DEBUG if verbose else logging.INFO)
-    root.addHandler(handler)
+    root.setLevel(logging.DEBUG if verbose or diagnostic else logging.INFO)
+    if diagnostic:
+        handler = RotatingFileHandler(log_path(), maxBytes=1_000_000, backupCount=1, encoding="utf-8")
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+        root.addHandler(handler)
+    else:
+        root.addHandler(logging.NullHandler())
     if sys.stderr is not None:
         root.addHandler(logging.StreamHandler())
 
@@ -116,167 +119,6 @@ def icon_path() -> Path | None:
     base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
     path = base / "assets" / "icon.ico"
     return path if path.is_file() else None
-
-
-def load_webview():
-    """전용 창을 만드는 pywebview. 쓸 수 없으면 None (그때는 Edge 앱 창이나 기본 브라우저로 연다)."""
-    if not gameinfo.has_webview2():
-        log.info("WebView2가 없어 Edge 앱 창으로 엽니다.")
-        return None
-    try:
-        import webview
-    except Exception:  # noqa: BLE001 - 설치 안 됨, .NET 초기화 실패 등
-        log.exception("전용 창을 쓸 수 없어 Edge 앱 창으로 엽니다.")
-        return None
-    return webview
-
-
-GPU_OFF_FLAG = "--disable-gpu"
-BROWSER_ARGS_ENV = "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"
-
-
-def with_flag(args: str | None, flag: str) -> str:
-    """옵션 문자열 뒤에 flag를 덧붙인다. 기존 내용은 그대로 두고, 이미 있으면 붙이지 않는다."""
-    args = args or ""
-    if flag in args.split():
-        return args
-    return f"{args} {flag}" if args.strip() else flag
-
-
-def load_edge_chrome():
-    """전용 창에서 WebView2를 만드는 pywebview 모듈."""
-    from webview.platforms import edgechromium
-
-    return edgechromium
-
-
-def disable_webview_gpu() -> None:
-    """WebView2가 그래픽카드(GPU) 대신 CPU로 화면을 그리게 한다.
-
-    그래픽 드라이버와의 충돌 가능성을 줄인다. 파일 로딩 실패나 렌더러 종료는 별도로 기록한다.
-    옵션은 두 곳에 넣는다: 환경 변수(관리자 권한 실행이면 WebView2가 무시한다)와 코드(관리자여도 적용된다).
-    """
-    os.environ[BROWSER_ARGS_ENV] = with_flag(os.environ.get(BROWSER_ARGS_ENV), GPU_OFF_FLAG)
-    try:
-        module = load_edge_chrome()
-    except Exception:  # noqa: BLE001 - 창 부품을 못 읽으면 pywebview도 창을 못 띄워 Edge 창으로 넘어간다
-        log.exception("WebView2 부품을 읽지 못해 GPU 끄기를 환경 변수로만 넣습니다.")
-        return
-    patch_edge_chrome(module)
-
-
-def patch_edge_chrome(module) -> None:
-    """pywebview가 WebView2 옵션을 정한 뒤, WebView2를 켜기 전에 GPU 끄기 옵션을 덧붙인다.
-
-    pywebview(6.2)는 옵션을 정한 WebView2를 창에 붙이고(Controls.Add) 나서 켠다(EnsureCoreWebView2Async).
-    pywebview에 옵션을 넣는 공식 설정이 없어서, 그 사이에 오는 '창에 부품이 붙음'(ControlAdded) 신호에서 고친다.
-    """
-    original = module.EdgeChrome
-    if getattr(original, "gpu_off", False):
-        return
-
-    class EdgeChrome(original):
-        gpu_off = True
-
-        def __init__(self, form, *args, **kwargs):
-            done = []
-
-            def on_control_added(sender, event):
-                try:
-                    props = getattr(getattr(self, "webview", None), "CreationProperties", None)
-                    if props is not None and not done:
-                        props.AdditionalBrowserArguments = with_flag(props.AdditionalBrowserArguments, GPU_OFF_FLAG)
-                        done.append(True)
-                        log.info("WebView2 GPU 비활성화 옵션 적용")
-                except Exception:  # noqa: BLE001 - 창 만들기를 방해하지 않도록 기록만 한다
-                    log.exception("WebView2 옵션 수정 실패")
-
-            form.ControlAdded += on_control_added
-            try:
-                super().__init__(form, *args, **kwargs)
-            finally:
-                form.ControlAdded -= on_control_added
-            if not done:
-                log.warning("WebView2에 GPU 끄기를 코드로 넣지 못했어요. 관리자 권한으로 실행하면 적용되지 않을 수 있어요.")
-
-        def on_webview_ready(self, sender, event):
-            if event.IsSuccess:
-                try:
-                    core = sender.CoreWebView2
-                    log.info("WebView2 초기화 완료: 런타임 %s", core.Environment.BrowserVersionString)
-                    core.ProcessFailed += self.on_process_failed
-                except Exception:  # 진단 기능 때문에 창 초기화가 중단되지 않도록 한다.
-                    log.exception("WebView2 진단 연결 실패")
-            else:
-                log.error("WebView2 초기화 실패: %s", event.InitializationException)
-            return super().on_webview_ready(sender, event)
-
-        def on_navigation_completed(self, sender, event):
-            if event.IsSuccess:
-                log.info("WebView2 페이지 탐색 완료")
-            else:
-                log.error("WebView2 페이지 탐색 실패: %s", event.WebErrorStatus)
-            return super().on_navigation_completed(sender, event)
-
-        def on_process_failed(self, sender, event):
-            log.error(
-                "WebView2 프로세스 오류: kind=%s reason=%s exit=%s",
-                event.ProcessFailedKind, getattr(event, "Reason", "unknown"),
-                getattr(event, "ExitCode", "unknown"),
-            )
-
-    module.EdgeChrome = EdgeChrome
-
-
-def run_app_window(webview, server: AppServer, url: str) -> bool:
-    """전용 창을 띄우고 닫힐 때까지 기다린다 (서버는 뒤에서 돈다).
-
-    창이 한 번도 뜨지 못했으면 False를 돌려준다. 이때 서버는 멈추기만 하고 다시 쓸 수 있다.
-    """
-    window = webview.create_window(
-        APP_NAME, url, width=1280, height=840, min_size=(760, 560),
-        background_color="#0B0D10", text_select=True,
-    )
-    shown = threading.Event()
-    minimized = threading.Event()
-    window.events.shown += lambda *_: shown.set()
-    window.events.minimized += lambda *_: minimized.set()
-    window.events.restored += lambda *_: minimized.clear()
-    window.events.maximized += lambda *_: minimized.clear()
-
-    def pick_folder(initial: str | None) -> str | None:
-        chosen = window.create_file_dialog(webview.FileDialog.FOLDER, directory=initial or "")
-        return chosen[0] if chosen else None
-
-    def bring_to_front() -> None:
-        if minimized.is_set():
-            window.restore()
-        window.show()
-        window.on_top = True  # 다른 창 뒤에 가려져 있으면 앞으로 올린다
-        window.on_top = False
-
-    server.folder_picker = pick_folder
-    server.on_focus = bring_to_front
-    server.on_exit = window.destroy  # 업데이트 후 새 버전으로 다시 켤 때 창을 닫는다
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    icon = icon_path()
-    disable_webview_gpu()
-    try:
-        webview.start(gui="edgechromium", icon=str(icon) if icon else None)
-    except Exception:  # noqa: BLE001 - 창 부품 오류는 기록하고 아래에서 처리
-        log.exception("전용 창 오류")
-    if not shown.is_set():
-        server.folder_picker = server.on_focus = server.on_exit = None
-        server.shutdown()
-        thread.join(5)
-        return False
-    # 적용하는 중에 창을 닫았으면 그 작업이 끝날 때까지 기다린 뒤 끝낸다
-    if not server.finish_operations(timeout=300):
-        log.warning("진행 중인 작업을 기다리다 시간이 지나 종료합니다.")
-    server.shutdown()
-    thread.join(5)
-    return True
 
 
 def show_existing(url: str) -> None:
@@ -331,14 +173,17 @@ def show_error(message: str) -> None:
         print(message, file=sys.stderr)
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, *, diagnostic: bool = False) -> int:
     parser = argparse.ArgumentParser(description=f"{APP_NAME} - Helldivers 2 모드 매니저")
     parser.add_argument("--data-dir", help=f"모드 보관 폴더 (기본: %%LOCALAPPDATA%%\\{APP_NAME})")
     parser.add_argument("--port", type=int, default=PREFERRED_PORT)
     parser.add_argument("--no-window", action="store_true", help="창을 열지 않고 서버만 실행 (개발용)")
     parser.add_argument("--browser", action="store_true", help="전용 창 대신 Edge 앱 창(또는 기본 브라우저)으로 열기")
     parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("--diagnostic", action="store_true", help="분석용 로그를 exe 옆에 기록")
     args = parser.parse_args(argv)
+    diagnostic = diagnostic or args.diagnostic
+    updater.ASSET_NAME = f"{APP_NAME}-diagnostic.exe" if diagnostic else f"{APP_NAME}.exe"
 
     custom_dir = args.data_dir or os.environ.get("HD2MM_DATA_DIR")
     data_dir = Path(custom_dir or default_data_dir()).resolve()
@@ -349,6 +194,10 @@ def main(argv: list[str] | None = None) -> int:
         show_error(t("startup.check_failed", detail=exc))
         return 1
     if not acquired:
+        if diagnostic:
+            from .ui_text import tr
+            show_error(tr("native.close_other"))
+            return 1
         if args.no_window:
             log.error("같은 보관함의 모드 매니저가 이미 실행 중이에요.")
             return 1
@@ -370,7 +219,7 @@ def main(argv: list[str] | None = None) -> int:
         show_error(t("startup.data_dir_failed", path=data_dir, detail=exc))
         return 1
     try:
-        setup_logging(args.verbose)
+        setup_logging(args.verbose, diagnostic=diagnostic)
     except OSError as exc:
         show_error(t("startup.log_failed", path=log_path(), detail=exc))
         return 1
@@ -384,36 +233,37 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     # 업데이트 후 다시 켤 때도 같은 보관 폴더·창 방식으로 켜지도록 넘길 옵션
-    updater.RESTART_ARGS[:] = (["--data-dir", str(data_dir)] if args.data_dir else []) + (["--browser"] if args.browser else [])
-    webview = None if args.no_window or args.browser else load_webview()
+    updater.RESTART_ARGS[:] = (["--data-dir", str(data_dir)] if args.data_dir else []) + (["--browser"] if args.browser else []) + (["--diagnostic"] if diagnostic else [])
     try:
         library = Library(data_dir)
         if not library.game_path:
             library.set_game_path(gameinfo.detect_game_path())
         # 전용 창이면 창이 닫힐 때 끝나므로, 연결이 끊기면 스스로 끝나는 기능은 Edge 창 모드에서만 쓴다
-        server = create_server(library, args.port, auto_exit=not args.no_window and webview is None)
+        server = create_server(library, args.port, auto_exit=args.browser and not args.no_window)
     except Exception as exc:  # noqa: BLE001 - 창 없이 실행되므로 메시지 상자로 알림
         log.exception("시작 실패")
         show_error(t("startup.failed", detail=exc))
         return 1
 
     # 화면이 처음 제대로 뜨면 지난 업데이트가 남긴 옛 exe를 지운다 (교체 작업은 이것으로 성공을 확인한다)
-    server.on_ready = updater.cleanup_leftovers
+    server.on_ready = updater.cleanup_leftovers if args.browser else None
     url = f"http://127.0.0.1:{server.port}/"
     instance_file = data_dir / "instance.json"
     write_json(instance_file, {"port": server.port, "pid": os.getpid()})
     log.info("%s %s 시작: %s (보관 폴더 %s)", APP_NAME, __version__, url, data_dir)
     try:
-        if webview is not None:
-            if run_app_window(webview, server, url):
-                return 0
-            log.warning("전용 창을 열지 못해 Edge 앱 창으로 엽니다.")
-            server.start_auto_exit()
+        if not args.no_window and not args.browser:
+            from .native_ui import run_window
+            return run_window(server, icon_path(), diagnostic=diagnostic)
         if not args.no_window:
             open_window(url + "?app=1")
         server.serve_forever()
     except KeyboardInterrupt:
         pass
+    except Exception as exc:
+        log.exception("창 시작 실패")
+        show_error(t("startup.failed", detail=exc))
+        return 1
     finally:
         server.server_close()
         instance_file.unlink(missing_ok=True)

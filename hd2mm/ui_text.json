@@ -1,8 +1,4 @@
-'use strict';
-
-// 화면 문구 (한국어 / 영어). 서버 쪽 문구는 hd2mm/i18n.py 에 있다.
-// 두 언어의 키와 {이름} 자리 표시가 같아야 한다 (tests/test_i18n.py 가 확인).
-const I18N = {
+{
   "ko": {
     "app.title": "Modocracy · Helldivers 2 모드 매니저",
     "common.loading": "불러오는 중…",
@@ -178,7 +174,14 @@ const I18N = {
     "disconnected.text": "이 창을 닫고 모드 매니저를 다시 실행해 주세요.",
     "settings.language_busy": "모드 추가·적용 같은 작업이 끝난 뒤에 언어를 바꿀 수 있어요.",
     "language.switching": "언어를 바꾸는 중이에요",
-    "language.switching_note": "하던 작업을 마무리한 뒤 새 언어로 다시 열려요."
+    "language.switching_note": "하던 작업을 마무리한 뒤 새 언어로 다시 열려요.",
+    "native.diagnostic": "분석판",
+    "native.diagnostic_note": "분석판 · 실행 파일 옆의 log.txt에 오류와 실행 정보를 기록하고 있어요.",
+    "native.close_other": "분석판을 실행하려면 먼저 열려 있는 Modocracy를 완전히 종료해 주세요.",
+    "native.retry": "다시 불러오기",
+    "native.load_failed": "화면 정보를 불러오지 못했어요",
+    "native.wait_close": "진행 중인 작업을 마친 뒤 종료합니다…",
+    "native.licenses": "오픈소스 라이선스"
   },
   "en": {
     "app.title": "Modocracy · Helldivers 2 Mod Manager",
@@ -355,6 +358,13 @@ const I18N = {
     "disconnected.text": "Close this window and start Modocracy again.",
     "settings.language_busy": "You can change the language after the current task (adding or applying mods) finishes.",
     "language.switching": "Switching language",
-    "language.switching_note": "The window will reopen in the new language once pending work is done."
+    "language.switching_note": "The window will reopen in the new language once pending work is done.",
+    "native.diagnostic": "Diagnostic",
+    "native.diagnostic_note": "Diagnostic build · Errors and runtime details are recorded in log.txt beside this executable.",
+    "native.close_other": "Close the running Modocracy instance before starting the diagnostic build.",
+    "native.retry": "Retry",
+    "native.load_failed": "Could not load the app state",
+    "native.wait_close": "Finishing the current operation before closing…",
+    "native.licenses": "Open-source licenses"
   }
-};
+}

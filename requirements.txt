@@ -1,2 +1,2 @@
-# app.py가 pywebview 내부(edgechromium.EdgeChrome)에 끼어들므로 버전을 좁게 고정한다. 올릴 때는 GPU 끄기가 적용되는지 확인할 것.
-pywebview>=6.2.1,<6.3
+# Qt Widgets에 필요한 모듈만 포함한다. WebView2/Qt WebEngine은 사용하지 않는다.
+PySide6-Essentials==6.10.3

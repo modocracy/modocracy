@@ -16,7 +16,11 @@ Arsenal, HD2MM에서 쓰는 모드 압축 파일(`manifest.json` 포함)을 그�
 
 코드 서명이 없는 프로그램이라 처음 실행할 때 "Windows의 PC 보호" 창이 뜰 수 있습니다. **추가 정보 → 실행** 을 누르세요.
 
-**필요한 것:** Windows 10/11. 화면은 Windows에 기본으로 들어 있는 WebView2 부품으로 그립니다(없는 PC에서는 Edge 창으로 대신 열립니다). `.7z`, `.rar` 모드를 쓰려면 [7-Zip](https://www.7-zip.org/)도 필요합니다.
+**필요한 것:** Windows 10(1809 이상) / Windows 11 x64. 2.0.0부터 화면은 PySide6 + Qt Widgets로 그립니다. Python·Qt는 exe에 포함되어 있어 별도로 설치할 필요가 없습니다. `.7z`, `.rar` 모드를 쓰려면 [7-Zip](https://www.7-zip.org/)도 필요합니다.
+
+일반 사용자는 **`Modocracy.exe`**를 받으면 됩니다. 같은 릴리즈의 **`Modocracy-diagnostic.exe`**는 문제 제보를 위한 분석판이며 로그를 기록합니다. 두 파일은 각각 독립적으로 실행됩니다.
+
+**v1.3.3 이하에서 올 때는 이번 한 번 수동 업데이트가 필요합니다.** 저장소 이전 때문에 구버전에서 [업데이트] 대신 [받으러 가기]가 나오거나 “이 릴리즈에는 자동 업데이트용 파일 정보가 없어요.”라고 표시될 수 있습니다. 앱을 완전히 종료하고 새 `Modocracy.exe`를 받아 기존 파일과 교체하세요. 모드 보관함은 그대로 두면 됩니다. [2.0.0 업데이트 안내](docs/releases/v2.0.0.md)
 
 ## 사용 순서
 
@@ -24,8 +28,8 @@ Arsenal, HD2MM에서 쓰는 모드 압축 파일(`manifest.json` 포함)을 그�
 2. **켜기·옵션** — 쓸 모드의 스위치를 켜고, 옵션이 있는 모드는 오른쪽에서 고릅니다.
 3. **순서 정하기** — 목록에서 끌어서 옮기거나 `위로/아래로` 버튼을 씁니다.
    **아래에 있을수록 우선순위가 높아서**, 겹치는 부분은 아래 모드가 덮어씁니다.
-4. **적용하기** — 노란 `적용하기` 버튼을 눌러야 게임 폴더에 실제로 설치됩니다.
-   바꾼 내용이 아직 반영되지 않았으면 위쪽 상태 표시줄이 노란색으로 알려 줍니다.
+4. **적용하기** — `적용하기` 버튼을 눌러야 게임 폴더에 실제로 설치됩니다.
+   바꾼 내용이 아직 반영되지 않았으면 위쪽 상태 안내에 표시됩니다.
 5. **게임 실행** — `게임 실행` 버튼(Steam 실행)이나 평소처럼 게임을 켭니다.
 
 게임에서 모드를 모두 빼고 싶으면 `모두 제거` 를 누르세요. 모드 목록은 남아 있어 언제든 다시 적용할 수 있습니다.
@@ -66,38 +70,40 @@ The app is shown in English unless Windows is set to Korean. You can change it i
 exe 파일 옆에 `ModocracyData` 폴더를 만들어 두면 그 폴더를 대신 사용합니다(USB 등 휴대용).
 이전 이름(HD2ModManager)으로 쓰던 보관 폴더는 처음 실행할 때 자동으로 옮겨집니다.
 
-로그는 **실행한 exe 파일과 같은 폴더의 `log.txt`** 에 저장됩니다(설정 화면의 로그 열기도 이 파일을 엽니다).
-로그가 1 MB를 넘으면 이전 내용은 같은 폴더의 `log.txt.1`에 보관합니다. 소스로 실행할 때는 프로젝트 루트에 저장됩니다.
+일반판은 로그 파일을 만들지 않습니다. **분석판만 실행한 exe와 같은 폴더의 `log.txt`** 에 기록합니다(설정 화면의 로그 열기도 이 파일을 엽니다).
+로그가 1 MB를 넘으면 이전 내용은 같은 폴더의 `log.txt.1`에 보관합니다. 소스에서 `--diagnostic`으로 실행하면 프로젝트 루트에 저장됩니다.
 
 ## 화면이 일부만 보이거나 검게 나올 때
 
-1. 프로그램을 완전히 종료한 뒤, exe가 있는 폴더에서 `Modocracy.exe --browser`로 실행해 보세요.
-   PowerShell에서는 `.\Modocracy.exe --browser`를 사용합니다. 같은 화면을 Edge 창으로 열어 전용 WebView2 창과 비교합니다.
-2. 제보할 때는 앱 버전, Windows 버전, 위 실행 방식에서도 발생하는지와 문제가 생긴 직후의 `log.txt`를 함께 알려 주세요.
-   화면을 쓸 수 없어도 실행 파일과 같은 폴더에서 로그를 찾을 수 있습니다. 공유하기 전에 개인 폴더 경로 등을 확인하세요.
-3. 로그의 `UI error: resource`는 CSS·JS 파일 로딩 실패, `UI error: javascript` / `promise`는 화면 코드 실행 오류입니다.
-   `WebView2 초기화 실패`, `페이지 탐색 실패`, `프로세스 오류`는 전용 창 내부의 실패를 구분합니다.
-   `UI ready`는 화면 코드가 최초 구성을 마쳤다는 뜻이며, 실제 픽셀이 정상으로 표시됐다는 보장은 아닙니다.
+1. 일반판을 완전히 종료하고 같은 릴리즈의 `Modocracy-diagnostic.exe`를 실행하세요.
+2. 문제가 생기는 작업을 한 뒤 앱 버전, Windows 버전과 exe 옆의 `log.txt`를 함께 알려 주세요.
+   로그에는 개인 폴더 경로가 포함될 수 있습니다. 자동으로 전송되지는 않습니다.
+3. 분석판은 Python·Qt 버전, 화면 크기·DPI, 최초 화면 구성, 모드 작업, 예외와 Qt 진단 메시지를 기록합니다.
+   `Qt UI ready`는 첫 화면 구성과 그리기 이벤트를 처리했다는 뜻이며, 모든 PC에서 실제 표시가 정상이라는 보장은 아닙니다.
 
-GPU 가속을 꺼도 파일 로딩·JavaScript·WebView2 프로세스 문제는 남을 수 있으므로, 증상만으로 GPU 문제라고 단정하지 않습니다.
+2.0.0은 기본 화면에서 웹 리소스 로딩과 WebView2 합성 경로를 사용하지 않습니다. 제보자의 PC에서 문제가 해결됐는지는 분석판으로 확인해야 합니다.
 
 ## 개발자용
 
 ```bat
-build.bat                                          :: .venv를 만들어 필요한 부품을 설치하고, 테스트 후 dist\Modocracy.exe 생성
-.venv\Scripts\python -m hd2mm                       :: 소스에서 바로 실행 (전용 창)
-.venv\Scripts\python -m hd2mm --browser             :: 전용 창 대신 Edge 앱 창으로 실행
+build.bat                                          :: 테스트 후 일반판·분석판 단일 exe 두 개 생성
+.venv\Scripts\python -m hd2mm                       :: 소스에서 바로 실행 (Qt Widgets)
+.venv\Scripts\python -m hd2mm --diagnostic          :: 소스 실행 + 분석 로그
+.venv\Scripts\python -m hd2mm --browser             :: 이전 웹 화면을 명시적으로 실행 (개발용)
 .venv\Scripts\python -m unittest discover -s tests -t .   :: 테스트
 ```
 
-- 실행에 필요한 부품은 `requirements.txt`(pywebview), 빌드에는 `requirements-build.txt`(+ PyInstaller)에 적혀 있습니다.
-- 자동 업데이트는 GitHub 최신 릴리즈의 `Modocracy.exe` 파일을 받으므로, 릴리즈에 올릴 때 파일 이름을 그대로 두어야 합니다 (`hd2mm/updater.py`).
+- 실행 부품은 `requirements.txt`(PySide6-Essentials), 빌드에는 `requirements-build.txt`(+ PyInstaller)에 적혀 있습니다.
+- `dist/Modocracy.exe`, `dist/Modocracy-diagnostic.exe`, `dist/SHA256SUMS.txt`를 만듭니다. 릴리즈에는 두 exe를 같은 버전으로 함께 올립니다. 일반판은 일반판 파일, 분석판은 분석판 파일로 업데이트하므로 이 파일 이름을 유지해야 합니다.
+- `build.bat`은 로컬 빌드만 수행합니다. push, 태그 생성, GitHub 릴리즈 공개는 수행하지 않습니다.
+- 소스와 빌드 절차를 통해 번들 라이브러리를 교체하여 다시 빌드할 수 있습니다. 포함된 라이선스는 설정의 **오픈소스 라이선스**에서 확인할 수 있습니다.
 
 - `hd2mm/core.py` — 모드 해석(manifest), 보관함, 적용·제거·백업 로직
-- `hd2mm/server.py` — 화면과 로직을 잇는 로컬 서버(127.0.0.1 전용)
-- `hd2mm/app.py` — 실행, 전용 창(pywebview) 열기, 중복 실행 방지(이미 켜져 있으면 그 창을 앞으로)
-- `hd2mm/web/` — 화면(HTML·CSS·JS)
-- `hd2mm/i18n.py`, `hd2mm/web/i18n.js` — 한국어·영어 문구 사전 (서버 쪽 / 화면 쪽)
+- `hd2mm/server.py` — 공통 명령 처리, 중복 실행 창 활성화 및 개발용 웹 API(127.0.0.1 전용)
+- `hd2mm/app.py` — 실행, 일반판·분석판 선택, 중복 실행 방지
+- `hd2mm/native_ui.py`, `hd2mm/native_backend.py` — Qt Widgets 화면과 백그라운드 작업
+- `hd2mm/web/` — 명시적으로 `--browser`를 지정했을 때 사용하는 이전 웹 화면
+- `hd2mm/i18n.py`, `hd2mm/ui_text.json` — 한국어·영어 문구 사전 (로직 / 공통 화면)
 - 적용 규칙: 켜진 모드를 목록 위→아래 순서로 훑으며, 같은 아카이브(`9ba626afa44a3aa3` 등)의 패치 파일에
   `patch_0, patch_1, …` 번호를 새로 매겨 게임 `data` 폴더에 복사합니다. 매니저가 설치한 파일 목록은
   `deployed.json` 에 기록해 두었다가 다음 적용·제거 때 정확히 그 파일만 지웁니다.

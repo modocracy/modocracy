@@ -1,7 +1,7 @@
 """화면에 보이는 문구의 한국어·영어 사전.
 
 언어 설정은 "auto"(Windows 표시 언어가 한국어면 한국어, 아니면 영어), "ko", "en" 중 하나다.
-화면(웹) 쪽 문구는 hd2mm/web/i18n.js 에 따로 있고, tests/test_i18n.py 가 두 언어의 키와
+화면 쪽 문구는 hd2mm/ui_text.json 에 따로 있고, tests/test_i18n.py 가 두 언어의 키와
 {자리}가 맞는지 검사한다.
 """
 from __future__ import annotations

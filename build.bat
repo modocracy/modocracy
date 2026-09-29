@@ -1,5 +1,5 @@
 @echo off
-rem Builds dist\Modocracy.exe using a project-local virtual environment (.venv).
+rem Builds two single-file executables: standard and diagnostic.
 setlocal
 cd /d "%~dp0"
 
@@ -8,6 +8,10 @@ if not exist ".venv\Scripts\python.exe" (
   python -m venv .venv || goto :fail
 )
 set "PY=%~dp0.venv\Scripts\python.exe"
+if not exist "%~dp0build\tmp" mkdir "%~dp0build\tmp"
+set "TEMP=%~dp0build\tmp"
+set "TMP=%~dp0build\tmp"
+set "PIP_CACHE_DIR=%~dp0build\pip-cache"
 
 echo [1/3] Installing build requirements...
 "%PY%" -m pip install --quiet --disable-pip-version-check -r requirements-build.txt || goto :fail
@@ -15,18 +19,12 @@ echo [1/3] Installing build requirements...
 echo [2/3] Running tests...
 "%PY%" -m unittest discover -s tests -t . || goto :fail
 
-echo [3/3] Building exe...
-"%PY%" -m PyInstaller --noconfirm --clean --onefile --windowed ^
-  --name Modocracy ^
-  --icon "%~dp0assets\icon.ico" ^
-  --version-file "%~dp0assets\version_info.txt" ^
-  --add-data "%~dp0hd2mm\web;hd2mm\web" ^
-  --add-data "%~dp0assets\icon.ico;assets" ^
-  --distpath "%~dp0dist" --workpath "%~dp0build\pyinstaller" --specpath "%~dp0build" ^
-  "%~dp0launcher.py" || goto :fail
+echo [3/3] Building standard and diagnostic executables...
+"%PY%" "%~dp0tools\build.py" || goto :fail
 
 echo.
 echo Done: %~dp0dist\Modocracy.exe
+echo Done: %~dp0dist\Modocracy-diagnostic.exe
 exit /b 0
 
 :fail

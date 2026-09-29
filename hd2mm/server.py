@@ -220,7 +220,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def _static(self, name: str) -> None:
         file = self.server.web_dir / name
-        data = file.read_bytes()
+        if name == "i18n.js":
+            from .ui_text import CATALOG
+            data = ("const I18N = " + json.dumps(CATALOG, ensure_ascii=False) + ";").encode("utf-8")
+        else:
+            data = file.read_bytes()
         if name == "index.html":
             data = data.replace(b"__HD2MM_TOKEN__", self.server.token.encode())
             data = data.replace(b"__HD2MM_VERSION__", __version__.encode())
@@ -314,79 +318,7 @@ class Handler(BaseHTTPRequestHandler):
             self._error(t("err.unknown"), 500)
 
     def _post(self, path: str, body: dict):
-        lib = self.server.library
-        parts = path.strip("/").split("/")
-        if path == "/api/ui-diagnostics":
-            event, detail = body.get("event"), body.get("detail", "")
-            if event not in ("ready", "error") or not isinstance(detail, str):
-                raise ModError(t("err.bad_request"))
-            with self.server.client_lock:
-                if self.server.ui_reports >= 100:
-                    return {"ok": True}
-                self.server.ui_reports += 1
-            # JS 예외나 요청 값의 줄바꿈이 별도 로그처럼 보이지 않게 JSON 문자열로 남긴다.
-            write_log = log.info if event == "ready" else log.warning
-            write_log("UI %s: %s", event, json.dumps(detail[:2000], ensure_ascii=False))
-            return {"ok": True}
-        if path == "/api/order":
-            ids = body.get("ids")
-            if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
-                raise ModError(t("err.bad_request"))
-            lib.reorder(ids)
-            return {"ok": True}
-        if len(parts) == 3 and parts[:2] == ["api", "mods"]:
-            lib.update(parts[2], body)
-            return {"ok": True}
-        if len(parts) == 4 and parts[:2] == ["api", "mods"] and parts[3] == "delete":
-            lib.remove(parts[2])
-            return {"ok": True}
-        if path in ("/api/deploy", "/api/purge"):
-            game = _require_game(lib)
-            if gameinfo.is_game_running():
-                raise ModError(t("err.game_running"))
-            mode = body.get("unmanaged", "ask")
-            if mode not in ("ask", "move", "keep") or (path == "/api/deploy" and mode == "keep"):
-                raise ModError(t("err.bad_request"))
-            action = lib.deploy if path == "/api/deploy" else lib.purge
-            result = action(game, mode)
-            log.info("%s 완료: %s", path, result)
-            return result
-        if path == "/api/settings":
-            # 보낸 값을 모두 검사한 뒤 한 번에 저장한다 (하나라도 잘못되면 아무것도 바꾸지 않음)
-            changes = {}
-            if "language" in body:
-                if body["language"] not in i18n.SETTINGS:
-                    raise ModError(t("err.bad_request"))
-                changes["language"] = body["language"]
-            if "gamePath" in body:
-                game, problem = gameinfo.check_game_path(body.get("gamePath"))
-                if problem and game is not None and not body.get("force"):
-                    raise ModError(problem)
-                changes["gamePath"] = str(game) if game else None
-            if "checkUpdates" in body:
-                changes["checkUpdates"] = bool(body["checkUpdates"])
-            if changes:
-                try:
-                    lib.update_settings(changes)
-                except OSError as exc:
-                    raise ModError(t("err.settings_save_failed", detail=exc)) from None
-            if "language" in changes:
-                i18n.set_language(i18n.resolve(changes["language"]))
-            return {"ok": True}
-        if path == "/api/update/install":
-            return _install_update(self.server)
-        if path == "/api/update/check":
-            return update_info(self.server, force=True)
-        if path == "/api/detect-game":
-            return {"path": gameinfo.detect_game_path()}
-        if path == "/api/pick-folder":
-            return {"path": _pick_folder(self.server, lib.game_path)}
-        if path == "/api/open":
-            return _open_target(lib, body)
-        if path == "/api/launch-game":
-            os.startfile(f"steam://rungameid/{gameinfo.STEAM_APP_ID}")  # noqa: S606 - Steam 실행
-            return {"ok": True}
-        return None
+        return dispatch(self.server, path, body)
 
     def _import(self, name: str) -> None:
         name = Path(name.replace("\\", "/")).name
@@ -414,6 +346,82 @@ class Handler(BaseHTTPRequestHandler):
             self._error(str(exc))
         finally:
             upload.unlink(missing_ok=True)
+
+
+def dispatch(server: AppServer, path: str, body: dict):
+    lib = server.library
+    parts = path.strip("/").split("/")
+    if path == "/api/ui-diagnostics":
+        event, detail = body.get("event"), body.get("detail", "")
+        if event not in ("ready", "error") or not isinstance(detail, str):
+            raise ModError(t("err.bad_request"))
+        with server.client_lock:
+            if server.ui_reports >= 100:
+                return {"ok": True}
+            server.ui_reports += 1
+        # JS 예외나 요청 값의 줄바꿈이 별도 로그처럼 보이지 않게 JSON 문자열로 남긴다.
+        write_log = log.info if event == "ready" else log.warning
+        write_log("UI %s: %s", event, json.dumps(detail[:2000], ensure_ascii=False))
+        return {"ok": True}
+    if path == "/api/order":
+        ids = body.get("ids")
+        if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
+            raise ModError(t("err.bad_request"))
+        lib.reorder(ids)
+        return {"ok": True}
+    if len(parts) == 3 and parts[:2] == ["api", "mods"]:
+        lib.update(parts[2], body)
+        return {"ok": True}
+    if len(parts) == 4 and parts[:2] == ["api", "mods"] and parts[3] == "delete":
+        lib.remove(parts[2])
+        return {"ok": True}
+    if path in ("/api/deploy", "/api/purge"):
+        game = _require_game(lib)
+        if gameinfo.is_game_running():
+            raise ModError(t("err.game_running"))
+        mode = body.get("unmanaged", "ask")
+        if mode not in ("ask", "move", "keep") or (path == "/api/deploy" and mode == "keep"):
+            raise ModError(t("err.bad_request"))
+        action = lib.deploy if path == "/api/deploy" else lib.purge
+        result = action(game, mode)
+        log.info("%s 완료: %s", path, result)
+        return result
+    if path == "/api/settings":
+        # 보낸 값을 모두 검사한 뒤 한 번에 저장한다 (하나라도 잘못되면 아무것도 바꾸지 않음)
+        changes = {}
+        if "language" in body:
+            if body["language"] not in i18n.SETTINGS:
+                raise ModError(t("err.bad_request"))
+            changes["language"] = body["language"]
+        if "gamePath" in body:
+            game, problem = gameinfo.check_game_path(body.get("gamePath"))
+            if problem and game is not None and not body.get("force"):
+                raise ModError(problem)
+            changes["gamePath"] = str(game) if game else None
+        if "checkUpdates" in body:
+            changes["checkUpdates"] = bool(body["checkUpdates"])
+        if changes:
+            try:
+                lib.update_settings(changes)
+            except OSError as exc:
+                raise ModError(t("err.settings_save_failed", detail=exc)) from None
+        if "language" in changes:
+            i18n.set_language(i18n.resolve(changes["language"]))
+        return {"ok": True}
+    if path == "/api/update/install":
+        return _install_update(server)
+    if path == "/api/update/check":
+        return update_info(server, force=True)
+    if path == "/api/detect-game":
+        return {"path": gameinfo.detect_game_path()}
+    if path == "/api/pick-folder":
+        return {"path": _pick_folder(server, lib.game_path)}
+    if path == "/api/open":
+        return _open_target(lib, body)
+    if path == "/api/launch-game":
+        os.startfile(f"steam://rungameid/{gameinfo.STEAM_APP_ID}")  # noqa: S606 - Steam 실행
+        return {"ok": True}
+    return None
 
 
 def _require_game(lib: Library) -> Path:

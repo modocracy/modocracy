@@ -25,9 +25,8 @@ def fields(text: str) -> set[str]:
 
 
 def js_catalog() -> dict[str, dict[str, str]]:
-    source = (WEB / "i18n.js").read_text(encoding="utf-8")
-    body = source.split("const I18N = ", 1)[1].rstrip().rstrip(";")
-    return json.loads(body)
+    from hd2mm.ui_text import CATALOG
+    return CATALOG
 
 
 class LanguageCase(unittest.TestCase):
@@ -59,7 +58,7 @@ class CatalogTests(unittest.TestCase):
         self.assertGreater(len(used), 100)
         self.assertEqual(used - known, set())
         # 사전에 있는데 아무 데서도 안 쓰는 문구가 쌓이지 않게
-        self.assertEqual(known - used - {"app.title"}, set())
+        self.assertEqual({k for k in known - used - {"app.title"} if not k.startswith("native.")}, set())
 
     def test_web_has_no_hardcoded_korean(self):
         script = (WEB / "app.js").read_text(encoding="utf-8")
