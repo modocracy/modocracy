@@ -6,10 +6,10 @@
 
 | 항목 | 실제 값 |
 | --- | --- |
-| 구버전 API | `https://api.github.com/repos/JJ-dot-eng/modocracy/releases/latest` |
+| 구버전 API | `https://api.github.com/repos/<이전 저장소>/releases/latest` |
 | 리디렉션 후 API | `https://api.github.com/repositories/1386861789/releases/latest` |
 | 당시 최신 릴리즈 | `1.3.3` |
-| 구버전 허용 접두사 | `https://github.com/JJ-dot-eng/modocracy/releases/download/` |
+| 구버전 허용 접두사 | `https://github.com/<이전 저장소>/releases/download/` |
 | 실제 다운로드 주소 | `https://github.com/modocracy/modocracy/releases/download/v1.3.3/Modocracy.exe` |
 | `fetch_latest().asset_url` | `None` |
 | 파일 크기 | `17519622` bytes |
