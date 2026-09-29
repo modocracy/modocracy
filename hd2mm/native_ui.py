@@ -2132,8 +2132,10 @@ def run_window(server, icon_path, *, diagnostic=False):
     sys.excepthook = exception_hook
     log.info("Runtime: Python=%s Qt=%s OS=%s platform=%s diagnostic=%s", platform.python_version(),
              qVersion(), platform.platform(), application.platformName(), diagnostic)
-    for screen in application.screens():
-        log.info("Screen: name=%s geometry=%s dpi=%s ratio=%s", screen.name(), screen.geometry(),
+    # 모니터 모델명은 분석에 필요 없어서 남기지 않는다 (해상도·배율만)
+    for number, screen in enumerate(application.screens(), 1):
+        size = screen.geometry()
+        log.info("Screen %s: %sx%s dpi=%s ratio=%s", number, size.width(), size.height(),
                  screen.logicalDotsPerInch(), screen.devicePixelRatio())
     window = MainWindow(server, diagnostic=diagnostic)
     window.ready.connect(updater.cleanup_leftovers)

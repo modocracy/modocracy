@@ -9,6 +9,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -88,12 +89,37 @@ def migrate_legacy_data(data_dir: Path) -> bool:
     return True
 
 
+class PrivacyFormatter(logging.Formatter):
+    """로그에 쓰기 전에 사용자 폴더(C:\\Users\\이름)를 %USERPROFILE%로 가린다.
+
+    제보할 때 로그를 공개된 곳에 붙여 넣어도 Windows 사용자 이름이 드러나지 않게 한다.
+    오류 상세(traceback)와 dict를 그대로 찍어 \\가 두 번 나오는 경로도 함께 가린다.
+    """
+
+    def __init__(self, fmt: str, home: str | Path | None = None):
+        super().__init__(fmt)
+        home = str(home if home is not None else Path.home()).rstrip("\\/")
+        variants = {home, home.replace("\\", "/"), home.replace("\\", "\\\\")} if home else set()
+        # C:\Users\Jane 은 가리고 C:\Users\Janet 은 건드리지 않는다
+        self.pattern = re.compile(
+            "(?:" + "|".join(re.escape(v) for v in sorted(variants, key=len, reverse=True)) + r")(?![^\\/'\"\s,;:)\]}])",
+            re.IGNORECASE,
+        ) if variants else None
+
+    def format(self, record: logging.LogRecord) -> str:
+        text = super().format(record)
+        return self.pattern.sub("%USERPROFILE%", text) if self.pattern else text
+
+
+LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+
+
 def setup_logging(verbose: bool, *, diagnostic: bool = False) -> None:
     root = logging.getLogger()
     root.setLevel(logging.DEBUG if verbose or diagnostic else logging.INFO)
     if diagnostic:
         handler = RotatingFileHandler(log_path(), maxBytes=1_000_000, backupCount=1, encoding="utf-8")
-        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+        handler.setFormatter(PrivacyFormatter(LOG_FORMAT))
         root.addHandler(handler)
     else:
         root.addHandler(logging.NullHandler())

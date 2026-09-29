@@ -2,6 +2,7 @@
 import json
 import logging
 import os
+import sys
 import tempfile
 import threading
 import time
@@ -249,6 +250,36 @@ class BuildVariantTests(unittest.TestCase):
             app.setup_logging(True)
         file_handler.assert_not_called()
         self.assertIsInstance(logger.handlers[0], logging.NullHandler)
+
+    def test_diagnostic_log_hides_user_folder(self):
+        formatter = app.PrivacyFormatter(app.LOG_FORMAT, home=r"C:\Users\Jane Doe")
+        record = logging.LogRecord("hd2mm", logging.INFO, __file__, 1, "%s | %s | %s | %s", (
+            r"C:\Users\Jane Doe\AppData\Local\Modocracy",
+            {"backup": r"c:\users\jane doe\Games\backup"},  # dict는 \가 두 번 찍힌다
+            "C:/Users/Jane Doe/Downloads/mod.zip",
+            r"C:\Users\Jane Doe2\keep",  # 다른 사용자 폴더는 건드리지 않는다
+        ), None)
+        try:
+            raise OSError(r"cannot open C:\Users\Jane Doe\x.txt")
+        except OSError:
+            record.exc_info = sys.exc_info()
+        text = formatter.format(record)
+        self.assertNotIn("Jane Doe\\", text.replace("Jane Doe2", ""))
+        self.assertNotIn("jane doe", text.lower().replace("jane doe2", ""))
+        self.assertIn(r"%USERPROFILE%\AppData\Local\Modocracy", text)
+        self.assertIn("%USERPROFILE%\\\\Games", text)
+        self.assertIn("%USERPROFILE%/Downloads", text)
+        self.assertIn(r"C:\Users\Jane Doe2\keep", text)
+        self.assertIn(r"cannot open %USERPROFILE%\x.txt", text)
+
+    def test_diagnostic_log_file_uses_privacy_formatter(self):
+        logger = logging.Logger("diagnostic-test")
+        with mock.patch.object(app.logging, "getLogger", return_value=logger), \
+                mock.patch.object(app, "RotatingFileHandler") as file_handler, \
+                mock.patch.object(app.sys, "stderr", None):
+            app.setup_logging(False, diagnostic=True)
+        formatter = file_handler.return_value.setFormatter.call_args.args[0]
+        self.assertIsInstance(formatter, app.PrivacyFormatter)
 
     def test_diagnostic_updater_chooses_diagnostic_asset_only(self):
         data = release_json()
