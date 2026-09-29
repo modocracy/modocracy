@@ -30,7 +30,7 @@ DIGEST = hashlib.sha256(NEW_EXE).hexdigest()
 def release_json(tag="v9.9.9", digest=f"sha256:{DIGEST}", url=None, size=len(NEW_EXE)):
     return {
         "tag_name": tag,
-        "html_url": "https://github.com/JJ-dot-eng/modocracy/releases/tag/" + tag,
+        "html_url": "https://github.com/modocracy/modocracy/releases/tag/" + tag,
         "body": "변경 내용",
         "assets": [{
             "name": "Modocracy.exe", "size": size, "digest": digest,
