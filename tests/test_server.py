@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import socket
@@ -14,7 +15,7 @@ import urllib.request
 from pathlib import Path
 from unittest import mock
 
-from hd2mm import app, gameinfo, i18n
+from hd2mm import app, gameinfo, i18n, paths
 from hd2mm.app import web_dir
 from hd2mm.core import Library
 from hd2mm.server import AppServer, Handler, RASTER_TYPES
@@ -62,6 +63,15 @@ class ServerCase(unittest.TestCase):
 
 
 class ServerTests(ServerCase):
+    def test_open_log_uses_application_folder_instead_of_library(self):
+        expected = self.tmp / "log.txt"
+        expected.write_text("application log", encoding="utf-8")
+        (self.lib.data_dir / "log.txt").write_text("old log", encoding="utf-8")
+        with mock.patch("hd2mm.server.log_path", return_value=expected), \
+                mock.patch("hd2mm.server.os.startfile", create=True) as open_file:
+            self.assertEqual(self.request("/api/open", body={"target": "log"})[0], 200)
+        open_file.assert_called_once_with(str(expected))
+
     def test_ui_diagnostics_require_token_and_validate_body(self):
         body = {"event": "error", "detail": "resource: /i18n.js"}
         self.assertEqual(self.request("/api/ui-diagnostics", body=body, token=False)[0], 403)
@@ -306,6 +316,43 @@ class ServerTests(ServerCase):
                 shutdown.assert_called_once()
                 self.assertEqual(ticks[0], 9 if connected else 124)
                 self.assertFalse(server.begin_operation())
+
+
+class LoggingTests(unittest.TestCase):
+    def test_log_is_written_beside_exe_or_source_not_extraction_directory(self):
+        with tempfile.TemporaryDirectory(prefix="hd2mm-log-") as tmp:
+            root = Path(tmp)
+            for frozen in (True, False):
+                with self.subTest(frozen=frozen):
+                    folder = root / ("app" if frozen else "source")
+                    folder.mkdir()
+                    logger = logging.Logger("log-test")
+                    with mock.patch.object(paths.sys, "frozen", frozen, create=True), \
+                            mock.patch.object(paths.sys, "executable", str(folder / "Modocracy.exe")), \
+                            mock.patch.object(paths.sys, "_MEIPASS", str(root / "extracted"), create=True), \
+                            mock.patch.object(paths, "__file__", str(folder / "hd2mm" / "paths.py")), \
+                            mock.patch.object(app.logging, "getLogger", return_value=logger), \
+                            mock.patch.object(app.sys, "stderr", None):
+                        try:
+                            app.setup_logging(False)
+                            logger.info("로그 위치 확인")
+                        finally:
+                            for handler in logger.handlers:
+                                handler.close()
+                    self.assertIn("로그 위치 확인", (folder / "log.txt").read_text(encoding="utf-8"))
+            self.assertFalse((root / "extracted" / "log.txt").exists())
+
+    def test_unwritable_log_reports_log_path(self):
+        self.addCleanup(i18n.set_language, i18n.current())
+        with tempfile.TemporaryDirectory(prefix="hd2mm-log-") as tmp, \
+                mock.patch.object(app, "acquire_instance_mutex", return_value=True), \
+                mock.patch.object(app, "setup_logging", side_effect=PermissionError("denied")), \
+                mock.patch.object(app, "log_path", return_value=Path(tmp) / "app" / "log.txt"), \
+                mock.patch.object(app, "show_error") as error, \
+                mock.patch.object(app, "Library") as library:
+            self.assertEqual(app.main(["--data-dir", tmp, "--no-window"]), 1)
+            self.assertIn(str(Path(tmp) / "app" / "log.txt"), error.call_args.args[0])
+            library.assert_not_called()
 
 
 class InstanceTests(unittest.TestCase):

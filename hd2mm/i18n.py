@@ -122,6 +122,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "startup.not_responding": "실행 중인 모드 매니저가 응답하지 않아요. 잠시 후 다시 실행해 주세요.",
         "startup.legacy_running": "이전 버전(HD2ModManager)이 실행 중이라 설정을 옮기지 못했어요.\n이전 버전 창을 닫고 다시 실행해 주세요.",
         "startup.data_dir_failed": "모드 보관 폴더를 만들 수 없어요:\n{path}\n\n{detail}",
+        "startup.log_failed": "실행 파일 옆에 로그 파일을 만들 수 없어요:\n{path}\n\n프로그램을 쓰기 가능한 폴더로 옮겨 실행해 주세요.\n\n{detail}",
         "startup.failed": "모드 매니저를 시작하지 못했어요.\n\n{detail}",
         "startup.no_port": "사용할 수 있는 포트가 없어요.",
     },
@@ -196,6 +197,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "startup.legacy_running": "Your settings couldn't be moved because the previous version (HD2ModManager) is running.\n"
                                   "Close its window and start Modocracy again.",
         "startup.data_dir_failed": "Couldn't create the mod library folder:\n{path}\n\n{detail}",
+        "startup.log_failed": "Couldn't create the log file next to the application:\n{path}\n\nMove the application to a writable folder and try again.\n\n{detail}",
         "startup.failed": "Modocracy couldn't start.\n\n{detail}",
         "startup.no_port": "No free network port is available.",
     },

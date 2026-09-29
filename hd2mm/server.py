@@ -16,6 +16,7 @@ from urllib.parse import parse_qs, quote, unquote, urlsplit
 from . import __version__, gameinfo, i18n, updater
 from .i18n import t
 from .core import Library, ModError, NeedsConfirm, analyze, mtime_ns, safe_join
+from .paths import log_path
 
 log = logging.getLogger(__name__)
 
@@ -459,7 +460,7 @@ def _open_target(lib: Library, body: dict) -> dict:
         path = _require_game(lib)
         path = path / "data" if target == "data" else path
     elif target == "log":
-        path = lib.data_dir / "log.txt"
+        path = log_path()
     elif target == "release":
         os.startfile(updater.RELEASES_PAGE)  # noqa: S606 - 정해진 릴리즈 페이지만 연다
         return {"ok": True}

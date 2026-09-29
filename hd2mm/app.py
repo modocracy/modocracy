@@ -21,6 +21,7 @@ from pathlib import Path
 from . import APP_NAME, LEGACY_APP_NAME, __version__, gameinfo, i18n, updater
 from .i18n import t
 from .core import SETTINGS_FILE, Library, read_json, write_json
+from .paths import log_path
 from .server import AppServer
 
 PREFERRED_PORT = 47815
@@ -87,8 +88,8 @@ def migrate_legacy_data(data_dir: Path) -> bool:
     return True
 
 
-def setup_logging(data_dir: Path, verbose: bool) -> None:
-    handler = RotatingFileHandler(data_dir / "log.txt", maxBytes=1_000_000, backupCount=1, encoding="utf-8")
+def setup_logging(verbose: bool) -> None:
+    handler = RotatingFileHandler(log_path(), maxBytes=1_000_000, backupCount=1, encoding="utf-8")
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     root = logging.getLogger()
     root.setLevel(logging.DEBUG if verbose else logging.INFO)
@@ -365,9 +366,13 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     try:
         data_dir.mkdir(parents=True, exist_ok=True)
-        setup_logging(data_dir, args.verbose)
     except OSError as exc:
         show_error(t("startup.data_dir_failed", path=data_dir, detail=exc))
+        return 1
+    try:
+        setup_logging(args.verbose)
+    except OSError as exc:
+        show_error(t("startup.log_failed", path=log_path(), detail=exc))
         return 1
 
     existing = running_instance(data_dir)

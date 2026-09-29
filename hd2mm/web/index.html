@@ -28,8 +28,8 @@
         notice.setAttribute('role', 'alert');
         notice.style.cssText = 'position:fixed;bottom:16px;left:16px;right:16px;z-index:10000;padding:16px;background:#331b1b;color:#fff;border:1px solid #ff8178;font:14px/1.5 sans-serif';
         notice.textContent = en
-          ? 'The interface could not load correctly. Retry, or restart Modocracy with --browser. Details are in log.txt. '
-          : '화면을 제대로 불러오지 못했어요. 다시 시도하거나, 종료 후 Modocracy를 --browser 옵션으로 실행해 주세요. 오류 확인: log.txt. ';
+          ? 'The interface could not load correctly. Retry, or restart Modocracy with --browser. Check log.txt next to the application. '
+          : '화면을 제대로 불러오지 못했어요. 다시 시도하거나, 종료 후 Modocracy를 --browser 옵션으로 실행해 주세요. 앱 파일 옆의 log.txt를 확인해 주세요. ';
         const retry = document.createElement('button');
         retry.textContent = en ? 'Retry' : '다시 시도';
         retry.style.cssText = 'padding:6px 12px;background:#fff;color:#111;border:1px solid #888;cursor:pointer';
