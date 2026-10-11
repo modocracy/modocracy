@@ -290,6 +290,12 @@ button { cursor: pointer; }
 .callout.info .ico { color: var(--info); }
 
 .options { display: flex; flex-direction: column; gap: 8px; }
+.section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.section-head h3 { margin: 0; }
+.option-sort {
+  height: 30px; padding: 0 8px; font-size: 13px;
+  border-radius: var(--radius-sm); border: 1px solid var(--line-2); background: var(--panel-2);
+}
 .option {
   display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 12px; align-items: start;
   padding: 12px; border-radius: var(--radius-sm); border: 1px solid var(--line); background: var(--bg-2);

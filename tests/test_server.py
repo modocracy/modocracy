@@ -233,6 +233,14 @@ class ServerTests(ServerCase):
         self.assertEqual(status, 200)
         self.assertEqual(self.lib.game_path, str(self.game))
 
+    def test_option_sort_setting_is_validated_and_reported(self):
+        self.assertEqual(self.request("/api/state")[1]["optionSort"], "default")
+        status, _ = self.request("/api/settings", body={"optionSort": "random"})
+        self.assertEqual(status, 400)
+        status, _ = self.request("/api/settings", body={"optionSort": "name"})
+        self.assertEqual(status, 200)
+        self.assertEqual(self.request("/api/state")[1]["optionSort"], "name")
+
     def test_mod_images_allow_only_raster_and_have_security_headers(self):
         files = {f"{ARCHIVE}.patch_0": "patch", "icon.svg": "<svg/>", "page.html": "<html/>"}
         for ext in RASTER_TYPES:

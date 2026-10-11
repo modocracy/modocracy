@@ -371,13 +371,35 @@ function description(m) {
   return h('div', { class: 'section' }, h('h3', null, t('detail.description')), h('div', { class: 'desc' }, m.description));
 }
 
+// 옵션을 보여 줄 순서(원래 번호 목록). 보기만 바꾸므로 저장되는 선택 번호는 그대로다.
+function optionOrder(list, sort) {
+  const order = list.map((_, i) => i);
+  if (sort === 'name') {
+    const name = (i) => list[i].name.toLowerCase();
+    order.sort((a, b) => (name(a) < name(b) ? -1 : name(a) > name(b) ? 1 : a - b));
+  }
+  return order;
+}
+
+async function setOptionSort(value) {
+  try {
+    await queuedApi('/api/settings', { body: { optionSort: value } });
+  } catch (e) {
+    toast('err', e.message);
+  }
+  await refresh();
+}
+
 function options(m) {
   if (!m.options?.length || m.error) return null;
   const replaceAt = (list, i, value) => list.map((v, j) => (j === i ? value : v));
+  const sort = state.optionSort || 'default';
+  const order = optionOrder(m.options, sort);
   let rows;
   if (m.mode === 'multi') {
     const only = m.options.length === 1;
-    rows = m.options.map((o, i) => {
+    rows = order.map((i) => {
+      const o = m.options[i];
       const on = m.state.enabledOptions[i];
       const sub = o.subs[m.state.selectedSubs[i]];
       return h('label', { class: `option${on ? ' active' : ''}` },
@@ -402,13 +424,20 @@ function options(m) {
         (sub?.image || o.image) ? h('img', { class: 'option-img', src: sub?.image || o.image, alt: '', draggable: 'false' }) : h('span'));
     });
   } else {
-    rows = m.options.map((o, i) => h('label', { class: `option${m.state.choice === i ? ' active' : ''}` },
-      h('input', { type: 'radio', name: `choice-${m.id}`, checked: m.state.choice === i, onchange: () => setModState(m.id, () => ({ choice: i })) }),
-      h('div', null, h('div', { class: 'option-name' }, o.name), o.description ? h('div', { class: 'option-desc' }, o.description) : null),
-      o.image ? h('img', { class: 'option-img', src: o.image, alt: '', draggable: 'false' }) : h('span')));
+    rows = order.map((i) => {
+      const o = m.options[i];
+      return h('label', { class: `option${m.state.choice === i ? ' active' : ''}` },
+        h('input', { type: 'radio', name: `choice-${m.id}`, checked: m.state.choice === i, onchange: () => setModState(m.id, () => ({ choice: i })) }),
+        h('div', null, h('div', { class: 'option-name' }, o.name), o.description ? h('div', { class: 'option-desc' }, o.description) : null),
+        o.image ? h('img', { class: 'option-img', src: o.image, alt: '', draggable: 'false' }) : h('span'));
+    });
   }
   const title = m.mode === 'single' ? t('detail.choose_one') : t('detail.options');
-  return h('div', { class: 'section' }, h('h3', null, title), h('div', { class: 'options' }, rows));
+  const sorter = m.options.length > 1
+    ? h('select', { class: 'option-sort', 'aria-label': t('detail.sort_aria'), title: t('detail.sort_aria'), onchange: (e) => setOptionSort(e.target.value) },
+      [['default', t('detail.sort_default')], ['name', t('detail.sort_name')]].map(([value, label]) => h('option', { value, selected: sort === value }, label)))
+    : null;
+  return h('div', { class: 'section' }, h('div', { class: 'section-head' }, h('h3', null, title), sorter), h('div', { class: 'options' }, rows));
 }
 
 function files(m) {

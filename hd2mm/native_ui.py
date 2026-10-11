@@ -271,6 +271,14 @@ def label(text: str = "", role: str = "", *, wrap: bool = True, font: QFont | No
     return widget
 
 
+def option_order(options, sort: str) -> list[int]:
+    """옵션을 보여 줄 순서(원래 번호 목록). 보기만 바꾸므로 저장되는 선택 번호는 그대로다."""
+    order = list(range(len(options)))
+    if sort == "name":
+        order.sort(key=lambda i: (options[i]["name"].casefold(), i))
+    return order
+
+
 def section_label(text: str) -> QLabel:
     return label(text.upper(), "section", wrap=False, selectable=False,
                  font=make_font(8.5, QFont.Weight.Bold, FONT_DISPLAY, spacing=14))
@@ -1487,7 +1495,8 @@ class MainWindow(QMainWindow):
     def render_detail(self, reset_scroll=False, force=True):
         mods = (self.state or {}).get("mods", [])
         current = self.selected_mod()
-        key = (self.selected_id, current, mods.index(current) if current else -1, len(mods), self.current_lang)
+        key = (self.selected_id, current, mods.index(current) if current else -1, len(mods), self.current_lang,
+               (self.state or {}).get("optionSort"))
         if not force and key == self._detail_key:
             return
         self._detail_key = key
@@ -1604,10 +1613,26 @@ class MainWindow(QMainWindow):
             return
         section = QVBoxLayout()
         section.setSpacing(8)
-        section.addWidget(section_label(tr("detail.choose_one" if mod["mode"] == "single" else "detail.options")))
+        title = section_label(tr("detail.choose_one" if mod["mode"] == "single" else "detail.options"))
+        sort = self.state.get("optionSort", "default")
+        if len(mod["options"]) > 1:
+            sorter = Combo()
+            sorter.setObjectName("optionSort")
+            sorter.setAccessibleName(tr("detail.sort_aria"))
+            sorter.setToolTip(tr("detail.sort_aria"))
+            sorter.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+            sorter.addItem(tr("detail.sort_default"), "default")
+            sorter.addItem(tr("detail.sort_name"), "name")
+            sorter.setCurrentIndex(max(0, sorter.findData(sort)))
+            sorter.currentIndexChanged.connect(
+                lambda _i: self.command("/api/settings", {"optionSort": sorter.currentData()}))
+            section.addLayout(row(title, None, sorter))
+        else:
+            section.addWidget(title)
         group = QButtonGroup(owner if owner is not None else self.detail_scroll)  # 상세 화면과 함께 지워진다
         # 생성 중 선택 신호는 연결하지 않고, 사용자 입력만 백엔드로 보낸다.
-        for index, option in enumerate(mod["options"]):
+        for index in option_order(mod["options"], sort):
+            option = mod["options"][index]
             if mod["mode"] == "single":
                 active = mod["state"]["choice"] == index
             else:

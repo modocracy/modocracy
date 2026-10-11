@@ -33,6 +33,7 @@ MAX_JSON_BYTES = 1024 * 1024
 # 업데이트 설치도 보관함을 건드리지 않는다 (내려받는 동안 화면이 멈추지 않도록)
 LOCK_FREE_POSTS = {"/api/pick-folder", "/api/detect-game", "/api/update/install", "/api/update/check", "/api/ui-diagnostics"}
 UPDATE_CHECK_SECONDS = 30 * 60  # 새 버전 확인 결과를 다시 쓰는 시간
+OPTION_SORTS = ("default", "name")  # 옵션 보기 순서: 모드에 적힌 순서 / 이름순 (적용 결과는 같다)
 RASTER_TYPES = {
     ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
     ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp",
@@ -400,6 +401,10 @@ def dispatch(server: AppServer, path: str, body: dict):
             changes["gamePath"] = str(game) if game else None
         if "checkUpdates" in body:
             changes["checkUpdates"] = bool(body["checkUpdates"])
+        if "optionSort" in body:
+            if body["optionSort"] not in OPTION_SORTS:
+                raise ModError(t("err.bad_request"))
+            changes["optionSort"] = body["optionSort"]
         if changes:
             try:
                 lib.update_settings(changes)
@@ -602,6 +607,7 @@ def build_state(lib: Library) -> dict:
         "appVersion": __version__,
         "checkUpdates": lib.settings.get("checkUpdates", True),
         "language": lib.settings.get("language", "auto"),  # 설정값: auto / ko / en
+        "optionSort": lib.settings.get("optionSort", "default"),  # 옵션 보기 순서: default / name
         "lang": i18n.current(),  # 지금 쓰는 언어
         "game": {
             "path": str(game) if game else None,

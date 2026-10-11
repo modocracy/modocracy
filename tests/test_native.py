@@ -97,7 +97,7 @@ class NativeTests(unittest.TestCase):
         mod = self.import_mod()
         self.assertEqual(self.window.mod_list.count(), 1)
         self.assertFalse(self.window.empty_button.isVisible())
-        combo = self.window.detail_scroll.findChild(QComboBox)
+        combo = next(c for c in self.window.detail_scroll.findChildren(QComboBox) if c.objectName() != "optionSort")
         combo.setCurrentIndex(1)
         self.wait(lambda: not self.window.busy)
         self.assertEqual(self.lib.snapshot()[0].state["selectedSubs"][0], 1)
@@ -124,6 +124,31 @@ class NativeTests(unittest.TestCase):
         self.wait(lambda: not self.window.busy)
         self.assertFalse(list((self.game / "data").iterdir()))
         self.assertEqual(len(self.lib.snapshot()), 2)
+
+    def test_option_sort_changes_view_only_and_is_remembered(self):
+        manifest = {"Version": 1, "Name": "Sorted", "Options": [
+            {"Name": name, "Include": [folder]} for name, folder in (("Zulu", "z"), ("alpha", "a"), ("Mike", "m"))]}
+        files = {"manifest.json": json.dumps(manifest)}
+        files.update({f"{folder}/{ARCHIVE}.patch_0": folder for folder in "zam"})
+        self.window.import_paths([str(make_zip(self.root / "Sorted.zip", files))])
+        self.wait(lambda: not self.window.busy and len(self.window.state["mods"]) > 0)
+
+        def names():
+            texts = (c.text() for c in self.window.detail_scroll.findChildren(QCheckBox))
+            return [text for text in texts if text in ("Zulu", "alpha", "Mike")]  # 사용 중 스위치는 빼고 옵션만
+        self.assertEqual(names(), ["Zulu", "alpha", "Mike"])
+        sorter = self.window.detail_scroll.findChild(QComboBox, "optionSort")
+        sorter.setCurrentIndex(sorter.findData("name"))
+        self.wait(lambda: not self.window.busy and names() == ["alpha", "Mike", "Zulu"])
+        self.assertEqual(self.lib.settings["optionSort"], "name")
+        # 보이는 순서가 바뀌어도 누른 옵션의 원래 번호가 바뀐다
+        next(c for c in self.window.detail_scroll.findChildren(QCheckBox) if c.text() == "Zulu").click()
+        self.wait(lambda: not self.window.busy)
+        self.assertEqual(self.lib.snapshot()[0].state["enabledOptions"], [False, True, True])
+        sorter = self.window.detail_scroll.findChild(QComboBox, "optionSort")
+        sorter.setCurrentIndex(sorter.findData("default"))
+        self.wait(lambda: not self.window.busy and names() == ["Zulu", "alpha", "Mike"])
+        self.assertEqual(self.lib.settings["optionSort"], "default")
 
     def test_unmanaged_cancel_preserves_files_then_move_backs_up(self):
         self.import_mod()
